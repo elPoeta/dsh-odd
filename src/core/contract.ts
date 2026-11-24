@@ -16,7 +16,7 @@ export interface SubagentReport {
   decisions: string[]
 }
 
-// TODO(verify): confirm this stays inside the host's assertObjectJsonSchema subset.
+// Object-rooted and inside the host's enforced JSON Schema subset (guarded by tests/adapter.spec.ts).
 export const REPORT_SCHEMA = {
   type: 'object',
   properties: {

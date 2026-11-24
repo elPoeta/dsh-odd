@@ -3,7 +3,7 @@
 Organic-Driven Development orchestrator for DeepSeek Harness.
 **The markdown task file is the source of truth.** Agents are temporary executors.
 
-## Status: phase 3 (skill registry with precedence and validation)
+## Status: phase 3 (skill registry), hardened for dsh 0.2.2-rc.5
 
 The orchestrator runs in the main agent. It reads and writes `.odd/tasks/<name>.md`
 through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases listed under
@@ -34,6 +34,8 @@ Commands: `/odd-init`, `/odd-status`, `/odd-resume <task>`, `/odd-skills [check]
 Tools: `odd_task_create`, `odd_task_read`, `odd_task_advance`, `odd_task_answer`,
 `odd_task_note`, `odd_task_archive`, `odd_dispatch`, `odd_skill_list`, `odd_skill_load`.
 
+`/odd-resume <task>` now steers the agent into resuming (read `odd-orchestrator`, then the task file).
+
 Circuit breakers (config.yml): `max_review_loops` (pair <-> code-review) and
 `max_step_retries`. When exceeded the task becomes `blocked`.
 
@@ -60,6 +62,7 @@ Circuit breakers (config.yml): `max_review_loops` (pair <-> code-review) and
   `toolFilter`, not as a sandbox. Real isolation comes with worktrees (phase 5).
 - Tool names in the filter are intersected with registered tools (the host rejects unknown names).
 - `odd_dispatch` blocks the parent turn while the child runs (foreground collection).
+- ODD tools are intentionally not concurrency-safe (`isConcurrencySafe` omitted), so the harness runs them one at a time.
 - Existing projects get the `code-review` dispatch default after upgrading, because the config is
   merged over defaults. Set `code-review: null` under `dispatch:` to keep it inline.
 
@@ -101,23 +104,42 @@ Default precedence, first match wins (`skills_paths` in `config.yml`):
 - Configs created by phase 1/2 keep their old `skills_paths` (two entries) and keep working. To adopt
   the new defaults, replace that list with the table above.
 
-## Before you run it in a real harness (IMPORTANT)
+## Harness compatibility (target: dsh 0.2.2-rc.5)
 
-The core (`src/core/*`) has no harness dependency and is fully tested.
-`src/host/adapter.ts` is the only file that touches the harness API and contains
-`TODO(verify)` markers (also in `subagent-client.ts`). Phase 3 added no new harness API assumptions: the registry is plain filesystem code.
-Open items: exact field names of `ctx.commands.register` /
-`ctx.tools.register` definitions, the tool schema format, the disposer shape, how a tool handler
-receives its calling Agent, the `ContentBlock` text shape, the `ToolRestriction` shape, and how to
-list registered tools. The `ctx.subagents.start` request/result contract itself is taken from the
-harness's `docs/subsystems/subagent.md` (compat target seen: `@deepseek-ai/dsh-subagent@0.1.0-rc.7`).
-DSH is a developer preview; read the installed `.d.ts` first:
+DSH is a developer preview and its API moves between rc releases. Pin it: `@deepseek-ai/dsh` is declared
+as an optional peer at exactly `0.2.2-rc.5`, and nothing in this plugin imports harness packages at runtime
+(the core is plain Node; `src/host/*` talks to `ctx` through duck-typed calls).
 
-```sh
-node -p "require.resolve('@deepseek-ai/dsh/package.json')"   # then lib/types/**/*.d.ts
-dsh --version                                                 # pin this version
-dsh web --dump-config
-```
+**Verified against the harness docs (master) and third-party plugins that state they ran on 0.2.1-rc.2.**
+Not yet executed on 0.2.2-rc.5 itself; do the smoke test below once.
+
+| Surface | Shape used | Where |
+|---|---|---|
+| `ctx.commands.register` | `{ name, description, input?: { hint }, handler(inv) }`, `inv = { commandId, agent, rawInput, signal }`, result `{ kind: 'success' \| 'error', text }` | `adapter.ts` |
+| `ctx.tools.register` | raw `ToolDefinition`: `name`, `description`, JSON-Schema `parameters`, mandatory `output: { schema, render }`, `execute(args, exec)` returning a string; own argument validation | `adapter.ts`, `api.ts` |
+| `exec` in a tool | `exec.agent` (calling Agent) and `exec.signal` | `odd_dispatch` |
+| `ctx.effect(fn, label)` | wraps every registration so it unloads with the plugin | `api.ts` |
+| `ctx.subagents.start(name, req)` | `prompt` as `{type:'text',text}` blocks, `parent`, `signal`, `outputSchema` (object root), `maxDepth`, `toolFilter` as `ToolRestriction { allow?, deny? }`; `run.result`, `run.dispose()` | `subagent-client.ts` |
+| `ctx.tools.schemas()` | global tool names, used to intersect the deny list (`restrict` rejects unknown names and empty filters) | `subagent-client.ts` |
+
+**Still an assumption:** `agent.steer([{ type: 'text', text }])` in `/odd-resume`. dsh-plan-mode documents using
+`agent.steer()` with one user text block, but I did not see its signature. If it fails, `/odd-resume` falls back
+to printing the instruction for you to send, so nothing breaks.
+
+### Smoke test (5 minutes, on 0.2.2-rc.5)
+
+1. `dsh --version` shows `0.2.2-rc.5`. Install: `dsh plugin --profile web add /path/to/dsh-odd`, then start `dsh web`.
+2. `/odd-init`, then `/odd-skills check`. Expect the plugin-bundled `odd-orchestrator` listed as `builtin`.
+3. Ask the agent to create a hotfix task with `odd_task_create`; confirm `.odd/tasks/<name>.md` appears and the
+   tool result renders as text (this exercises `output.render`).
+4. `/odd-resume <name>`. Expect the agent to start by loading `odd-orchestrator`. If it prints "Tell the agent",
+   `steer()` has a different signature: fix `steerAgent()` in `src/host/api.ts` (one function).
+5. With a valid `code-review` skill in `.odd/skills/`, advance the task to code-review and ask the agent to call
+   `odd_dispatch`. Expect a Handoffs entry in the md. A failure here with `UNSUPPORTED_CAPABILITY` or an unknown
+   tool name in the filter is recorded in the Log as a failed attempt (fail closed), not swallowed.
+
+If the web profile does not expose `commands`/`tools` the plugin will not load (`inject`); `subagents` is only
+needed at `odd_dispatch` time and gives a clear error if missing.
 
 ## Develop
 

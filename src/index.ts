@@ -7,8 +7,7 @@ export const inject = ['commands', 'tools']
 
 export interface Config { rootDir?: string; cwd?: string }
 
-// TODO(verify): wrap registrations in ctx.effect(() => disposer) once the
-// disposer shape returned by register() is confirmed, so they unwind on unload.
+// Registrations are wrapped in ctx.effect inside the adapter, so they unload with the plugin.
 export function apply(ctx: any, config: Config = {}) {
   // dist/index.js -> ../skills (the plugin's own skills, lowest precedence)
   const builtin = fileURLToPath(new URL('../skills', import.meta.url))
