@@ -12,9 +12,12 @@
  * installed .d.ts of @deepseek-ai/dsh-commands and @deepseek-ai/dsh-tools
  * (see: node -p "require.resolve('@deepseek-ai/dsh/package.json')").
  */
+import { defaultExec } from '../core/exec'
+import { dispatchPhase, formatReport, phaseMode } from '../core/dispatch'
 import {
-  archiveTask, createTask, formatStatus, initOdd, listTasks, mutateTask, readTask,
+  archiveTask, createTask, formatStatus, initOdd, listTasks, loadConfig, mutateTask, readTask,
 } from '../core/store'
+import { createSubagentClient } from './subagent-client'
 import { TASK_TYPES, appendLog, appendToSection, setNextStep, serializeTask, type TaskType } from '../core/task'
 import { OUTCOMES, advance, resolveInput, type Outcome } from '../core/workflow'
 
@@ -65,14 +68,14 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
   })
 
   // ---- model-facing tools: the orchestrator protocol --------------------
-  const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[], run: (a: any) => Promise<string>) =>
+  const tool = (name: string, description: string, properties: Record<string, unknown>, required: string[], run: (a: any, exec?: any) => Promise<string>) =>
     ctx.tools.register({
       name,
       description,
       // TODO(verify): the real registry may expect a schemastery schema
       // instead of plain JSON Schema.
       parameters: { type: 'object', properties, required },
-      execute: async (args: any) => text(await run(args)),
+      execute: async (args: any, exec?: any) => text(await run(args, exec)),
     })
 
   const str = { type: 'string' }
@@ -84,9 +87,28 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       return serializeTask(t)
     })
 
-  tool('odd_task_read', 'Read a task file. Always call this first when resuming work.',
+  tool('odd_task_read', 'Read a task file. Always call this first when resuming work. The first line says whether the current phase runs inline or via odd_dispatch.',
     { name: str }, ['name'],
-    async (a) => serializeTask(await readTask(cwd, a.name, rootDir)))
+    async (a) => {
+      const t = await readTask(cwd, a.name, rootDir)
+      const cfg = await loadConfig(cwd, rootDir)
+      const mode = phaseMode(cfg, t.frontmatter.phase)
+      const hint = mode === 'subagent' ? 'call odd_dispatch to run it in a clean-context subagent' : 'run it inline in this session'
+      return `[odd] phase=${t.frontmatter.phase} mode=${mode} -> ${hint}\n\n${serializeTask(t)}`
+    })
+
+  tool('odd_dispatch', 'Run the task\'s CURRENT phase in a clean-context subagent (only phases with mode=subagent). Records the result in the md and advances the workflow.',
+    { name: str }, ['name'],
+    async (a, exec) => {
+      // TODO(verify): how the tool handler exposes the calling Agent and the abort signal
+      // (docs: the signal is the tool's `exec.signal`).
+      const parent = exec?.agent
+      if (!parent) throw new Error('odd_dispatch: could not resolve the calling agent from the tool context')
+      const signal: AbortSignal = exec?.signal ?? new AbortController().signal
+      const client = createSubagentClient(ctx, parent)
+      const report = await dispatchPhase({ client, exec: defaultExec }, cwd, a.name, signal, rootDir)
+      return formatReport(report)
+    })
 
   tool('odd_task_advance', 'Record a phase result and move the workflow forward (applies circuit breakers).',
     { name: str, outcome: { type: 'string', enum: OUTCOMES }, summary: str, question: str }, ['name', 'outcome', 'summary'],

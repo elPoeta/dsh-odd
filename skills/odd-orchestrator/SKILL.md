@@ -3,7 +3,7 @@ name: odd-orchestrator
 description: Use when starting, resuming or advancing an ODD task (feature, hotfix or refactor). The markdown file in .odd/tasks/ is the source of truth; follow this protocol so work survives session restarts.
 ---
 
-# ODD orchestrator protocol (phase 1: runs in the main agent)
+# ODD orchestrator protocol (the orchestrator runs in the main agent)
 
 The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on chat history.
 
@@ -12,7 +12,10 @@ The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on 
 2. Starting: call `odd_task_create` (name is kebab-case; type is feature | hotfix | refactor).
 
 ## Run one phase
-1. The current phase is in the frontmatter (`phase`). Run the skill with that name (grill, story, pair, code-review, fix, refactor, ship).
+0. `odd_task_read` starts with `[odd] phase=<p> mode=<inline|subagent>`.
+   - `mode=subagent`: call `odd_dispatch` with the task name. Do NOT run the phase yourself. It builds a minimal handoff packet, runs the phase in a clean-context subagent, records the result in the md and advances the workflow. Read its answer: if the status is `needs_input`, ask the human the question, then `odd_task_answer`, then `odd_dispatch` again; if `blocked`, stop and report.
+   - `mode=inline`: continue with step 1 below.
+1. The current phase is in the frontmatter (`phase`). Run the skill with that name (grill, story, pair, fix, refactor, ship).
 2. Keep the result short. Record decisions with `odd_task_note` (section `Decisions`), proof with section `Evidence` (exact test command and result), and what you handed to the phase with section `Handoffs`.
 3. Never claim tests pass without running them yourself and recording the output in Evidence.
 4. Close the phase with `odd_task_advance`:
@@ -26,4 +29,5 @@ The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on 
 ## Rules
 - If status is `blocked`, stop and tell the human why. Do not work around the circuit breaker.
 - Do not commit or push unless the human asks.
+- A dispatched subagent never writes the md and cannot see it; only you (the orchestrator) record results.
 - Do not edit the task file by hand; use the `odd_task_*` tools (they lock and validate).
