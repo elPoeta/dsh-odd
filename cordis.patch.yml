@@ -1,0 +1,9 @@
+# Bundle patch: installed by `dsh plugin --profile web add dsh-plugin-odd`.
+# NOTE: a patch replaces a row's whole config (no merge).
+- insert:
+    - id: odd
+      name: 'dsh-plugin-odd'
+      config:
+        rootDir: .odd
+# Phase 4 (Engram) - uncomment once the mcp-client row shape is verified
+# against your installed dsh version (Engram MCP is stdio only: `engram mcp`).

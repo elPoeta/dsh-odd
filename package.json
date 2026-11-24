@@ -1,0 +1,30 @@
+{
+  "name": "dsh-plugin-odd",
+  "version": "0.1.0",
+  "description": "Organic-Driven Development orchestrator for DeepSeek Harness: markdown-as-source-of-truth task tracking, workflows and circuit breakers.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "skills", "cordis.patch.yml", "README.md"],
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": { "yaml": "2.8.1" },
+  "peerDependencies": { "@deepseek-ai/cordis": "*" },
+  "peerDependenciesMeta": { "@deepseek-ai/cordis": { "optional": true } },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "keywords": ["dsh", "dsh-plugin", "deepseek-harness", "cordis", "orchestrator", "odd"]
+}
