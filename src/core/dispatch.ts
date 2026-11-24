@@ -2,7 +2,7 @@ import { effectiveDeny, type OddConfig, type RoleConfig } from './config'
 import { REPORT_SCHEMA, parseReport, toAdvanceInput, type SubagentReport } from './contract'
 import type { ExecFn } from './exec'
 import { buildPacket } from './packet'
-import { loadSkill } from './skills'
+import { loadResolvedSkill } from './registry'
 import { loadConfig, mutateTask, readTask } from './store'
 import { appendToSection, type Task } from './task'
 import { advance, type AdvanceInput } from './workflow'
@@ -25,6 +25,8 @@ export interface DispatchDeps {
   client: SubagentClient
   exec: ExecFn
   now?: () => Date
+  /** Directories with the plugin's own skills (lowest precedence). */
+  builtinDirs?: string[]
 }
 
 export interface DispatchReport {
@@ -60,7 +62,7 @@ export async function dispatchPhase(
   }
   const role = cfg.dispatch[phase]
   if (!role) throw new Error(`Phase "${phase}" is not dispatchable (no dispatch.${phase} in config). Run it inline.`)
-  const skill = await loadSkill(phase, cfg.skills_paths, cwd)
+  const skill = await loadResolvedSkill(cwd, cfg, phase, { builtinDirs: deps.builtinDirs })
 
   let diff: string | undefined
   let diffError: string | undefined
@@ -109,7 +111,7 @@ export async function dispatchPhase(
   if (report) for (const f of report.findings) evidence.push(`- ${phase} finding (loop ${task.frontmatter.review_loops + 1}): ${f}`)
 
   const handoff =
-    `- ${now().toISOString()} ${phase} -> ${role.provider} (skill: ${skill.name}, packet: ${prompt.length} chars` +
+    `- ${now().toISOString()} ${phase} -> ${role.provider} (skill: ${skill.name}@${skill.source}, packet: ${prompt.length} chars` +
     `${diff !== undefined ? `, diff: ${diff.length} chars` : ''}) => ${input.outcome}: ${clip(input.summary, 300)}`
 
   const after = await mutateTask(cwd, name, (t: Task, c) => {

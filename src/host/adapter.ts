@@ -17,6 +17,9 @@ import { dispatchPhase, formatReport, phaseMode } from '../core/dispatch'
 import {
   archiveTask, createTask, formatStatus, initOdd, listTasks, loadConfig, mutateTask, readTask,
 } from '../core/store'
+import {
+  checkRegistry, formatCheck, formatSkillList, readSkillBody, resolveSkill, scanRegistry, SkillError,
+} from '../core/registry'
 import { createSubagentClient } from './subagent-client'
 import { TASK_TYPES, appendLog, appendToSection, setNextStep, serializeTask, type TaskType } from '../core/task'
 import { OUTCOMES, advance, resolveInput, type Outcome } from '../core/workflow'
@@ -25,12 +28,19 @@ import { OUTCOMES, advance, resolveInput, type Outcome } from '../core/workflow'
 // depends on harness internals.
 type AnyCtx = any // TODO(verify): replace with Context from '@deepseek-ai/cordis'
 
-export interface AdapterOptions { cwd: string; rootDir: string }
+export interface AdapterOptions {
+  cwd: string
+  rootDir: string
+  /** Plugin-bundled skills (lowest precedence). */
+  builtinDirs?: string[]
+}
 
 const text = (s: string) => ({ text: s }) // TODO(verify): CommandResult / tool result shape
 
 export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
   const { cwd, rootDir } = opts
+  const builtinDirs = opts.builtinDirs ?? []
+  const registry = async () => scanRegistry(cwd, await loadConfig(cwd, rootDir), { builtinDirs })
 
   // ---- human slash commands (do not start model work) -------------------
   ctx.commands.register({
@@ -46,6 +56,18 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
     name: 'odd-status',
     description: 'List active ODD tasks with phase, progress and next step',
     handler: async () => text(formatStatus(await listTasks(cwd, rootDir))),
+  })
+
+  ctx.commands.register({
+    name: 'odd-skills',
+    description: 'List the skill registry (precedence: ODD project > project > user > builtin). Use "/odd-skills check" to validate.',
+    inputHint: '[check]', // TODO(verify): field name for the input hint
+    handler: async (args: string) => {
+      const reg = await registry()
+      if (String(args ?? '').trim() === 'check') return text(formatCheck(checkRegistry(reg, await loadConfig(cwd, rootDir))))
+      const roots = reg.roots.map((r) => `- ${r.source}${r.exists ? '' : ' [missing]'}`).join('\n')
+      return text(`${formatSkillList(reg)}\n\nRoots (highest precedence first):\n${roots}`)
+    },
   })
 
   ctx.commands.register({
@@ -93,8 +115,11 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       const t = await readTask(cwd, a.name, rootDir)
       const cfg = await loadConfig(cwd, rootDir)
       const mode = phaseMode(cfg, t.frontmatter.phase)
-      const hint = mode === 'subagent' ? 'call odd_dispatch to run it in a clean-context subagent' : 'run it inline in this session'
-      return `[odd] phase=${t.frontmatter.phase} mode=${mode} -> ${hint}\n\n${serializeTask(t)}`
+      const hint = mode === 'subagent' ? 'call odd_dispatch to run it in a clean-context subagent' : `run it inline: call odd_skill_load with "${t.frontmatter.phase}" and follow it`
+      let skillInfo = 'skill=MISSING (run /odd-skills check)'
+      try { const e = resolveSkill(await registry(), t.frontmatter.phase); skillInfo = `skill=${e.key}@${e.source}` }
+      catch (err) { if (!(err instanceof SkillError)) throw err }
+      return `[odd] phase=${t.frontmatter.phase} mode=${mode} ${skillInfo} -> ${hint}\n\n${serializeTask(t)}`
     })
 
   tool('odd_dispatch', 'Run the task\'s CURRENT phase in a clean-context subagent (only phases with mode=subagent). Records the result in the md and advances the workflow.',
@@ -106,7 +131,7 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       if (!parent) throw new Error('odd_dispatch: could not resolve the calling agent from the tool context')
       const signal: AbortSignal = exec?.signal ?? new AbortController().signal
       const client = createSubagentClient(ctx, parent)
-      const report = await dispatchPhase({ client, exec: defaultExec }, cwd, a.name, signal, rootDir)
+      const report = await dispatchPhase({ client, exec: defaultExec, builtinDirs }, cwd, a.name, signal, rootDir)
       return formatReport(report)
     })
 
@@ -134,6 +159,17 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
         return { ...task, body: appendToSection(task.body, a.section, a.text) }
       }, rootDir)
       return 'ok'
+    })
+
+  tool('odd_skill_list', 'List available skills (name, source, description) in ODD precedence order. Includes ODD-only project skills the native skill tool cannot see.',
+    {}, [],
+    async () => formatSkillList(await registry()))
+
+  tool('odd_skill_load', 'Load the full instructions of a skill by name, resolved with ODD precedence (project overrides global). Use this for the current phase\'s skill.',
+    { name: str }, ['name'],
+    async (a) => {
+      const entry = resolveSkill(await registry(), a.name)
+      return `# Skill: ${entry.name} (${entry.source})\n\n${await readSkillBody(entry)}`
     })
 
   tool('odd_task_archive', 'Move a finished task to .odd/tasks/archive/.',

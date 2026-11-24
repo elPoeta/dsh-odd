@@ -40,6 +40,9 @@ export interface OddConfig {
  * further delegation, and ALL orchestrator tools (only the orchestrator writes the md).
  * Names that are not registered in the host are dropped before start (see pickKnown).
  */
+/** Tokens usable in skills_paths. {project} = nearest .git ancestor (or cwd), like DSH itself. */
+export const SKILL_PATH_TOKENS = ['project', 'dsh_home', 'agents_home']
+
 export const READONLY_DENY = [
   'write', 'edit', 'str_replace_editor', 'bash', 'pwsh',
   'subagent',
@@ -51,6 +54,19 @@ export const ROLE_DEFAULTS: RoleConfig = {
   provider: 'spawn', readonly: true, include_diff: false, max_depth: 1, tool_deny: [],
 }
 
+/**
+ * Precedence, highest first. Mirrors DSH's own roots (project-dsh, project-agents,
+ * user-dsh, user-agents) with the ODD project root on top; the plugin's bundled
+ * skills are always appended last as "builtin".
+ */
+export const DEFAULT_SKILLS_PATHS = [
+  '.odd/skills',
+  '{project}/.dsh/skills',
+  '{project}/.agents/skills',
+  '{dsh_home}/skills',
+  '{agents_home}/skills',
+]
+
 export const DEFAULT_CONFIG: OddConfig = {
   version: 1,
   mode: 'manual',
@@ -61,7 +77,7 @@ export const DEFAULT_CONFIG: OddConfig = {
     refactor: ['refactor', 'code-review', 'ship'],
   },
   review_loopback: { feature: 'pair', hotfix: 'fix', refactor: 'refactor' },
-  skills_paths: ['.odd/skills', '~/.agents/skills'],
+  skills_paths: [...DEFAULT_SKILLS_PATHS],
   dispatch: {
     'code-review': { ...ROLE_DEFAULTS, include_diff: true },
   },
@@ -82,9 +98,12 @@ review_loopback:
   feature: pair
   hotfix: fix
   refactor: refactor
-skills_paths:           # precedence: first match wins (project > user > built-in)
-  - .odd/skills
-  - ~/.agents/skills
+skills_paths:           # precedence: first match wins (ODD project > project > user > built-in)
+  - .odd/skills                  # ODD-only project skills (relative to where .odd lives)
+  - "{project}/.dsh/skills"      # {project} = nearest .git ancestor, like DSH
+  - "{project}/.agents/skills"
+  - "{dsh_home}/skills"          # $DSH_HOME or ~/.dsh
+  - "{agents_home}/skills"       # $DSH_AGENTS_HOME or ~/.agents
 diff_command: git diff HEAD   # change set embedded in the reviewer's handoff packet
 dispatch:               # phases run in a clean-context subagent; others run inline
   code-review:
@@ -133,6 +152,11 @@ export function validateConfig(cfg: OddConfig): void {
   }
   if (cfg.limits.max_review_loops < 1 || cfg.limits.max_step_retries < 0) throw new Error('Invalid limits')
   if (cfg.mode !== 'manual' && cfg.mode !== 'auto') throw new Error(`Invalid mode: ${String(cfg.mode)}`)
+  for (const p of cfg.skills_paths) {
+    for (const m of p.matchAll(/\{(\w+)\}/g)) {
+      if (!SKILL_PATH_TOKENS.includes(m[1]!)) throw new Error(`Unknown token {${m[1]}} in skills_paths (allowed: ${SKILL_PATH_TOKENS.join(', ')})`)
+    }
+  }
   for (const [phase, role] of Object.entries(cfg.dispatch)) {
     if (!allPhases.has(phase)) throw new Error(`dispatch."${phase}" is not a phase of any workflow`)
     if (!role.provider) throw new Error(`dispatch."${phase}".provider is required`)

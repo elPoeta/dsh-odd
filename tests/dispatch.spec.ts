@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { dispatchPhase, phaseMode, type RunRequest, type RunResult, type SubagentClient } from '../src/core/dispatch'
 import type { ExecFn } from '../src/core/exec'
 import { buildPacket } from '../src/core/packet'
-import { loadSkill } from '../src/core/skills'
 import { ROLE_DEFAULTS, mergeConfig } from '../src/core/config'
 import { createTask, initOdd, loadConfig, mutateTask, readTask } from '../src/core/store'
 import { getSection } from '../src/core/task'
@@ -19,7 +18,7 @@ beforeEach(async () => {
   cwd = await mkdtemp(join(tmpdir(), 'odd-d-'))
   await initOdd(cwd)
   await mkdir(join(cwd, '.odd', 'skills', 'code-review'), { recursive: true })
-  await writeFile(join(cwd, '.odd', 'skills', 'code-review', 'SKILL.md'), '---\nname: code-review\n---\nReview for bugs and missing tests.')
+  await writeFile(join(cwd, '.odd', 'skills', 'code-review', 'SKILL.md'), '---\nname: code-review\ndescription: Review a change set for bugs and missing tests\n---\nReview for bugs and missing tests.')
   await createTask(cwd, { name: 'login', type: 'feature', goal: 'Sign in with Google' })
   // bring the task to code-review: grill, story, pair done
   for (let i = 0; i < 3; i++) await mutateTask(cwd, 'login', (t, c) => advance(t, c, { outcome: 'done', summary: `step ${i}` }))
@@ -47,6 +46,7 @@ describe('dispatchPhase (code-review)', () => {
     expect(r).toMatchObject({ outcome: 'done', status: 'in_progress', nextPhase: 'ship' })
     const t = await readTask(cwd, 'login')
     expect(getSection(t.body, 'Handoffs')).toContain('code-review -> spawn')
+    expect(getSection(t.body, 'Handoffs')).toContain('skill: code-review@.odd/skills')
     expect(getSection(t.body, 'Decisions')).toContain('keep PKCE (from code-review)')
   })
 
@@ -57,6 +57,7 @@ describe('dispatchPhase (code-review)', () => {
     expect(p).toContain('Sign in with Google')
     expect(p).toContain('+const secret = 1')
     expect(p).toContain('Review for bugs and missing tests.')
+    expect(p).not.toContain('description: Review a change set')   // frontmatter stripped
     expect(p).not.toContain('## Log')
     expect(p).not.toContain('step 1')           // earlier phase summaries live in Log/Handoffs
     expect(p).toContain('read-only')
@@ -155,18 +156,6 @@ describe('packet + skill loader', () => {
     expect(big).toContain('truncated 10000 characters')
     const err = buildPacket({ task: t, phase: 'code-review', skillName: 's', skillText: 'x', role: ROLE_DEFAULTS, diff: '', diffError: 'git failed' })
     expect(err).toContain('diff unavailable')
-  })
-
-  it('skill precedence: project beats user', async () => {
-    const user = await mkdtemp(join(tmpdir(), 'odd-u-'))
-    await mkdir(join(user, 'code-review'), { recursive: true })
-    await writeFile(join(user, 'code-review', 'SKILL.md'), 'USER VERSION')
-    const s = await loadSkill('code-review', ['.odd/skills', user], cwd)
-    expect(s.text).toContain('Review for bugs')
-    const s2 = await loadSkill('code-review', [user, '.odd/skills'], cwd)
-    expect(s2.text).toBe('USER VERSION')
-    await expect(loadSkill('../etc/passwd', [user], cwd)).rejects.toThrow(/Invalid skill name/)
-    await rm(user, { recursive: true, force: true })
   })
 
   it('mergeConfig keeps working for configs written before phase 2', () => {
