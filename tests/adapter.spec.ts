@@ -66,10 +66,11 @@ describe('registration (verified shapes)', () => {
     registerAll(f.ctx, { cwd, rootDir: '.odd' })
     expect([...f.commands.keys()].sort()).toEqual(['odd-init', 'odd-memory', 'odd-resume', 'odd-skills', 'odd-status'])
     expect([...f.tools.keys()].sort()).toEqual([
-      'odd_dispatch', 'odd_memory_capture', 'odd_memory_recall', 'odd_skill_list', 'odd_skill_load', 'odd_task_advance',
-      'odd_task_answer', 'odd_task_archive', 'odd_task_create', 'odd_task_note', 'odd_task_read',
+      'odd_dispatch', 'odd_init', 'odd_memory_capture', 'odd_memory_recall', 'odd_skill_list', 'odd_skill_load',
+      'odd_task_advance', 'odd_task_answer', 'odd_task_archive', 'odd_task_create', 'odd_task_list', 'odd_task_note',
+      'odd_task_read',
     ])
-    expect(f.labels).toHaveLength(16)
+    expect(f.labels).toHaveLength(18)
     expect(f.commands.get('odd-resume').input).toEqual({ hint: '<task-name>' })
   })
 
@@ -268,6 +269,118 @@ describe('Engram memory tools', () => {
     await f.call('odd_task_create', { name: 'stuck', type: 'feature' })
     expect(await f.call('odd_task_advance', { name: 'stuck', outcome: 'blocked', summary: 'needs infra' })).toContain('odd_memory_capture')
     expect(await f.call('odd_memory_capture', { name: 'stuck' })).toContain('odd/stuck')
+  })
+})
+
+describe('project resolution: state lands in the SESSION project, never in $HOME', () => {
+  const agentIn = (cwd: string) => ({ session: { header: { cwd } } })
+  const execIn = (cwd: string) => ({ agent: agentIn(cwd), signal: new AbortController().signal })
+  let home: string, project: string
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'odd-home-'))
+    project = join(home, 'work', 'my-app')
+    await mkdir(join(project, '.git'), { recursive: true })
+    await mkdir(join(project, 'src', 'deep'), { recursive: true })
+  })
+  afterEach(() => rm(home, { recursive: true, force: true }))
+
+  const exists = (p: string) => import('node:fs/promises').then((m) => m.stat(p)).then(() => true, () => false)
+
+  it('creates .odd at the git root of the session cwd, not in the home folder (regression)', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })                     // no cwd override: resolved per call
+    await f.call('odd_init', {}, execIn(join(project, 'src', 'deep')))  // session started in a subfolder
+    expect(await exists(join(project, '.odd', 'config.yml'))).toBe(true)
+    expect(await exists(join(home, '.odd'))).toBe(false)
+    expect(await exists(join(project, 'src', 'deep', '.odd'))).toBe(false)
+  })
+
+  it('refuses to use the home folder as a project, with an actionable message', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await expect(f.call('odd_init', {}, execIn(home))).rejects.toThrow(/home folder.*Start dsh inside the project/s)
+    expect(await exists(join(home, '.odd'))).toBe(false)
+    expect((await f.run('odd-init', '', agentIn(home))).kind).toBe('error')
+  })
+
+  it('two sessions in two projects keep separate state', async () => {
+    const other = join(home, 'work', 'other')
+    await mkdir(join(other, '.git'), { recursive: true })
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await f.call('odd_task_create', { name: 'a-task', type: 'feature' }, execIn(project))
+    expect(await f.call('odd_task_list', {}, execIn(project))).toContain('a-task')
+    expect(await f.call('odd_task_list', {}, execIn(other))).toContain('No active ODD tasks')
+    expect(await exists(join(other, '.odd'))).toBe(false)             // listing never creates anything
+  })
+
+  it('an explicit cwd override in the plugin config wins', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home, cwd: project })
+    await f.call('odd_init', {}, execIn(home))
+    expect(await exists(join(project, '.odd', 'config.yml'))).toBe(true)
+  })
+})
+
+describe('autonomy: the orchestrator sets itself up', () => {
+  let proj: string, home: string
+  const exec = () => ({ agent: { session: { header: { cwd: proj } } }, signal: new AbortController().signal })
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'odd-h2-'))
+    proj = join(home, 'proj')
+    await mkdir(join(proj, '.git'), { recursive: true })
+  })
+  afterEach(() => rm(home, { recursive: true, force: true }))
+  const read = (p: string) => import('node:fs/promises').then((m) => m.readFile(p, 'utf8'))
+
+  it('odd_task_create initializes .odd on its own and says so', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    const out = await f.call('odd_task_create', { name: 'login', type: 'feature', goal: 'Sign in' }, exec())
+    expect(out).toContain('ODD was not set up')
+    expect(out).toContain('phase: grill')
+    expect(await f.call('odd_task_read', { name: 'login' }, exec())).toContain('# login')
+  })
+
+  it('setup adds a managed ODD block to AGENTS.md that tells every session to act as orchestrator', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await writeFile(join(proj, 'AGENTS.md'), '# Project rules\n\nUse tabs.\n')
+    await f.call('odd_init', {}, exec())
+    const md = await read(join(proj, 'AGENTS.md'))
+    expect(md).toContain('Use tabs.')                                // user content preserved
+    expect(md).toContain('odd_task_list')
+    expect(md).toContain('odd_skill_load')
+    expect(md).toContain('never ask the user to run `/odd-init`')
+    const again = await f.call('odd_init', {}, exec())
+    expect(again).toContain('already initialized')
+    expect((await read(join(proj, 'AGENTS.md'))).match(/odd:begin/g)).toHaveLength(1)   // idempotent
+  })
+
+  it('bootstrap.agents_md: false leaves AGENTS.md alone', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await mkdir(join(proj, '.odd'), { recursive: true })
+    await writeFile(join(proj, '.odd', 'config.yml'), 'version: 1\nbootstrap:\n  agents_md: false\n')
+    await f.call('odd_init', {}, exec())
+    expect(await import('node:fs/promises').then((m) => m.stat(join(proj, 'AGENTS.md'))).then(() => true, () => false)).toBe(false)
+  })
+
+  it('skills work BEFORE initialization and never create anything', async () => {
+    const builtin = join(home, 'plugin-skills')
+    await mkdir(join(builtin, 'odd-orchestrator'), { recursive: true })
+    await writeFile(join(builtin, 'odd-orchestrator', 'SKILL.md'), '---\nname: odd-orchestrator\ndescription: protocol\n---\nFOLLOW ME')
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home, builtinDirs: [builtin] })
+    expect(await f.call('odd_skill_load', { name: 'odd-orchestrator' }, exec())).toContain('FOLLOW ME')
+    expect(await import('node:fs/promises').then((m) => m.stat(join(proj, '.odd'))).then(() => true, () => false)).toBe(false)
+  })
+
+  it('other tools on an uninitialized project explain how to proceed', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await expect(f.call('odd_task_read', { name: 'x' }, exec())).rejects.toThrow(/odd_init|odd_task_create/)
   })
 })
 

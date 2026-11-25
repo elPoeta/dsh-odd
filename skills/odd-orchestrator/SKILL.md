@@ -8,8 +8,11 @@ description: Use when starting, resuming or advancing an ODD task (feature, hotf
 The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on chat history.
 
 ## Resume or start
-1. Resuming: call `odd_task_read` first. Read **Next step** before anything else.
-2. Starting: call `odd_task_create` (name is kebab-case; type is feature | hotfix | refactor).
+1. Call `odd_task_list` first. It shows this project's tasks (status, phase, next step) and works even if ODD is not set up yet.
+2. If a task clearly matches the request, resume it: call `odd_task_read` and read **Next step** before anything else.
+3. Otherwise create one with `odd_task_create` (name is kebab-case; type is feature | hotfix | refactor). It sets up `.odd/` in the project by itself. Never ask the human to run `/odd-init`; if another tool says ODD is not initialized, call `odd_init` yourself.
+4. If a tool says the session is in the home folder or filesystem root, tell the human to start dsh inside the project. Do not work around it.
+5. Quick questions and tiny edits do not need a task. Use ODD for features, hotfixes and refactors.
 
 ## Run one phase
 0. `odd_task_read` starts with `[odd] phase=<p> mode=<inline|subagent>`.

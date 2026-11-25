@@ -1,6 +1,7 @@
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { DEFAULT_CONFIG_YAML, parseConfig, type OddConfig } from './config'
+import { applyAgentsMd } from './bootstrap'
+import { DEFAULT_CONFIG_YAML, mergeConfig, parseConfig, type OddConfig } from './config'
 import { DEFAULT_TEMPLATES } from './templates'
 import { renderTask } from './templates'
 import { NAME_RE, TASK_TYPES, parseTask, progress, serializeTask, type Task, type TaskType } from './task'
@@ -28,7 +29,11 @@ export function paths(cwd: string, rootDir = '.odd'): Paths {
   }
 }
 
-/** Idempotent. Never overwrites existing files. Returns what it created. */
+export async function isInitialized(cwd: string, rootDir?: string): Promise<boolean> {
+  return exists(paths(cwd, rootDir).config)
+}
+
+/** Idempotent. Never overwrites existing files. Returns what it created or changed. */
 export async function initOdd(cwd: string, rootDir?: string): Promise<string[]> {
   const p = paths(cwd, rootDir)
   const created: string[] = []
@@ -39,15 +44,29 @@ export async function initOdd(cwd: string, rootDir?: string): Promise<string[]> 
     [p.config, DEFAULT_CONFIG_YAML],
     ...TASK_TYPES.map((t): [string, string] => [join(p.templates, `${t}.md`), DEFAULT_TEMPLATES[t]]),
   ]
+  files.push([join(p.root, '.gitignore'), 'tasks/*.lock\ntasks/*.tmp\n'])
   for (const [file, content] of files) {
     if (!(await exists(file))) { await writeFile(file, content, 'utf8'); created.push(file) }
+  }
+  // Managed AGENTS.md block: DSH injects it into every session in this project.
+  const cfg = parseConfig(await readFile(p.config, 'utf8'))
+  if (cfg.bootstrap.agents_md) {
+    const result = await applyAgentsMd(cwd, rootDir ?? '.odd')
+    if (result !== 'unchanged') created.push(`${join(cwd, 'AGENTS.md')} (managed ODD block ${result})`)
   }
   return created
 }
 
-export async function loadConfig(cwd: string, rootDir?: string): Promise<OddConfig> {
+/**
+ * `allowMissing` returns the defaults when the project has no .odd yet. Skill lookup and
+ * status do not need initialization, so they work (and never create anything) before it.
+ */
+export async function loadConfig(cwd: string, rootDir?: string, allowMissing = false): Promise<OddConfig> {
   const p = paths(cwd, rootDir)
-  if (!(await exists(p.config))) throw new Error('ODD is not initialized here. Run /odd-init first.')
+  if (!(await exists(p.config))) {
+    if (allowMissing) return mergeConfig({})
+    throw new Error('ODD is not initialized in this project. Call odd_init (or odd_task_create, which does it for you), or run /odd-init.')
+  }
   return parseConfig(await readFile(p.config, 'utf8'))
 }
 
@@ -105,7 +124,10 @@ export async function createTask(cwd: string, input: CreateTaskInput, rootDir?: 
 
 export async function readTask(cwd: string, name: string, rootDir?: string): Promise<Task> {
   const file = taskFile(cwd, name, rootDir)
-  if (!(await exists(file))) throw new Error(`Task "${name}" not found`)
+  if (!(await exists(file))) {
+    if (!(await isInitialized(cwd, rootDir))) await loadConfig(cwd, rootDir) // throws the "not initialized" guidance
+    throw new Error(`Task "${name}" not found. Call odd_task_list to see the tasks of this project.`)
+  }
   return parseTask(await readFile(file, 'utf8'))
 }
 

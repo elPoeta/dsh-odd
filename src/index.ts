@@ -11,5 +11,6 @@ export interface Config { rootDir?: string; cwd?: string }
 export function apply(ctx: any, config: Config = {}) {
   // dist/index.js -> ../skills (the plugin's own skills, lowest precedence)
   const builtin = fileURLToPath(new URL('../skills', import.meta.url))
-  registerAll(ctx, { cwd: config.cwd ?? process.cwd(), rootDir: config.rootDir ?? '.odd', builtinDirs: [builtin] })
+  // cwd is only an explicit override; otherwise the project is resolved per call from the session.
+  registerAll(ctx, { cwd: config.cwd, rootDir: config.rootDir ?? '.odd', builtinDirs: [builtin] })
 }

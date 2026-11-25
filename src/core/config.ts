@@ -37,6 +37,11 @@ export interface MemoryConfig {
   recall_limit: number
 }
 
+export interface BootstrapConfig {
+  /** Keep a managed ODD block in the project's AGENTS.md so every session acts as the orchestrator. */
+  agents_md: boolean
+}
+
 export interface OddConfig {
   version: number
   /** manual = ask the human between phases; auto = only for low-risk phases. */
@@ -53,6 +58,7 @@ export interface OddConfig {
   /** Command whose stdout is the change set handed to reviewers. */
   diff_command: string
   memory: MemoryConfig
+  bootstrap: BootstrapConfig
 }
 
 /**
@@ -103,6 +109,7 @@ export const DEFAULT_CONFIG: OddConfig = {
   },
   diff_command: 'git diff HEAD',
   memory: { enabled: false, server_name: 'engram', scope: 'project', max_item_chars: 1500, recall_limit: 5 },
+  bootstrap: { agents_md: true },
 }
 
 export const DEFAULT_CONFIG_YAML = `# ODD configuration. Markdown task files are the source of truth.
@@ -136,6 +143,8 @@ dispatch:               # phases run in a clean-context subagent; others run inl
     # memory: none     # none | read: whether the child may search Engram (it never writes)
     # verify_command: "" # orchestrator-run check after the child reports done
   # to disable: set a phase to null, e.g.  code-review: null
+bootstrap:
+  agents_md: true       # managed ODD block in AGENTS.md: sessions in this project act as the orchestrator
 memory:                 # Engram integration (opt-in). The task md stays the source of truth.
   enabled: false
   server_name: engram   # must match serverName of the @deepseek-ai/dsh-mcp-client row
@@ -145,9 +154,10 @@ memory:                 # Engram integration (opt-in). The task md stays the sou
   recall_limit: 5
 `
 
-type RawConfig = Partial<Omit<OddConfig, 'dispatch' | 'memory'>> & {
+type RawConfig = Partial<Omit<OddConfig, 'dispatch' | 'memory' | 'bootstrap'>> & {
   dispatch?: Record<string, Partial<RoleConfig> | null>
   memory?: Partial<MemoryConfig>
+  bootstrap?: Partial<BootstrapConfig>
 }
 
 export function mergeConfig(user: RawConfig | null | undefined): OddConfig {
@@ -166,6 +176,7 @@ export function mergeConfig(user: RawConfig | null | undefined): OddConfig {
     review_loopback: { ...DEFAULT_CONFIG.review_loopback, ...(u.review_loopback ?? {}) },
     dispatch,
     memory: { ...DEFAULT_CONFIG.memory, ...(u.memory ?? {}) },
+    bootstrap: { ...DEFAULT_CONFIG.bootstrap, ...(u.bootstrap ?? {}) },
   }
   validateConfig(cfg)
   return cfg
@@ -196,6 +207,7 @@ export function validateConfig(cfg: OddConfig): void {
     if (!Number.isInteger(role.max_depth) || role.max_depth < 0) throw new Error(`dispatch."${phase}".max_depth must be a non-negative integer`)
     if (role.memory !== 'none' && role.memory !== 'read') throw new Error(`dispatch."${phase}".memory must be "none" or "read"`)
   }
+  if (typeof cfg.bootstrap.agents_md !== 'boolean') throw new Error('bootstrap.agents_md must be true or false')
   const m = cfg.memory
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(m.server_name)) throw new Error('memory.server_name must match [A-Za-z0-9_-]{1,32}')
   if (m.scope !== 'project' && m.scope !== 'personal') throw new Error('memory.scope must be "project" or "personal"')

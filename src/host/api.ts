@@ -64,3 +64,12 @@ export async function steerAgent(agent: AnyCtx, text: string): Promise<void> {
   if (!agent || typeof agent.steer !== 'function') throw new Error('agent.steer is not available')
   await agent.steer([textBlock(text)])
 }
+
+/**
+ * Working directory of the session that owns an agent: agent.session.header.cwd
+ * (documented in the harness note on session identity). Undefined when not available.
+ */
+export function sessionCwd(agent: unknown): string | undefined {
+  const cwd = (agent as any)?.session?.header?.cwd
+  return typeof cwd === 'string' && cwd ? cwd : undefined
+}

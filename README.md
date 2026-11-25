@@ -3,7 +3,7 @@
 Organic-Driven Development orchestrator for DeepSeek Harness.
 **The markdown task file is the source of truth.** Agents are temporary executors.
 
-## Status: phase 4 (Engram memory), on top of the phase 3 registry, targeting dsh 0.2.2-rc.5
+## Status: phase 4 (Engram memory) + project-scoped autonomy, targeting dsh 0.2.2-rc.5
 
 The orchestrator runs in the main agent. It reads and writes `.odd/tasks/<name>.md`
 through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases listed under
@@ -16,6 +16,32 @@ through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases liste
 | 3 | skill registry (ODD project > project > user > built-in), validation, duplicate detection | this version |
 | 4 | Engram memory: recall before a task, capture when it closes; md wins on conflict | this version |
 | 5 | auto gates, git worktrees, parallelism | todo |
+
+## Where state lives, and how the orchestrator sets itself up
+
+- **Per project, resolved per call.** The project is the nearest `.git` ancestor of the *session's* working
+  directory (`agent.session.header.cwd`, the same rule DSH uses for project roots), else the session cwd.
+  The plugin never uses the directory dsh was launched from. Two sessions in two projects keep separate state.
+- **It refuses to use your home folder or `/`** and tells you to start dsh inside a project. (An explicit
+  `cwd` in the plugin config row overrides this and is trusted.)
+- **No manual setup.** `odd_task_create` initializes `.odd/` by itself and says so; `odd_init` does it explicitly;
+  `/odd-init` still exists for humans. `odd_task_list`, `odd_skill_list` and `odd_skill_load` work before
+  initialization and never create anything.
+- **Sessions act as the orchestrator without commands.** Initialization adds a small managed block to the
+  project's `AGENTS.md` (DSH injects it into every session under that project). It tells the agent: list tasks,
+  resume or create one, load the `odd-orchestrator` skill. Only the block between `<!-- odd:begin ... -->` and
+  `<!-- odd:end -->` is ever touched; the rest of your file is preserved byte for byte. Opt out with
+  `bootstrap.agents_md: false` in `.odd/config.yml` or delete the block.
+- `.odd/` is meant to be committed (the task files are the trace). `.odd/.gitignore` excludes lock/temp files.
+
+### Why not an agent preset (yet)
+
+A preset would give a dedicated "ODD mode" session (own prompt, tool allowlist, model). Presets are per-session
+Cordis compositions, and their mechanism changed across DSH releases (directory-based, then registry-based), with
+user reports of custom presets silently not registering or mounting only partially. Services with consumers outside
+the agent plane (the subagent registry, MCP) cannot live inside a preset, so ODD would split into a host half and a
+preset half. The AGENTS.md block gives most of the benefit with a verified mechanism. A preset is a good later
+step once the smoke test passes: it needs the preset directory/format of your installed version.
 
 ## Layout it creates (`/odd-init`)
 
@@ -33,7 +59,7 @@ through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases liste
 Commands: `/odd-init`, `/odd-status`, `/odd-resume <task>`, `/odd-skills [check]`, `/odd-memory`.
 Tools: `odd_task_create`, `odd_task_read`, `odd_task_advance`, `odd_task_answer`,
 `odd_task_note`, `odd_task_archive`, `odd_dispatch`, `odd_skill_list`, `odd_skill_load`,
-`odd_memory_recall`, `odd_memory_capture`.
+`odd_memory_recall`, `odd_memory_capture`, `odd_init`, `odd_task_list`.
 
 `/odd-resume <task>` now steers the agent into resuming (read `odd-orchestrator`, then the task file).
 
