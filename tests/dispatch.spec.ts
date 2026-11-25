@@ -62,6 +62,7 @@ describe('dispatchPhase (code-review)', () => {
     expect(p).not.toContain('step 1')           // earlier phase summaries live in Log/Handoffs
     expect(p).toContain('read-only')
     expect(client.calls[0]!.toolDeny).toEqual(expect.arrayContaining(['write', 'bash', 'odd_task_advance']))
+    expect(client.calls[0]!.toolDeny).toEqual(expect.arrayContaining(['mcp__engram__mem_save', 'mcp__engram__mem_search'])) // child gets no memory by default
   })
 
   it('changes_requested -> back to pair, findings land in Evidence', async () => {

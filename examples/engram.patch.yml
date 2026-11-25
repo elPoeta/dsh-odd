@@ -1,0 +1,17 @@
+# Add to $DSH_HOME/profiles/<profile>/cordis.patch.yml (or the machine-wide $DSH_HOME/cordis.patch.yml).
+# It MUST be inside `insert:`; a bare top-level row is treated as an override of an existing row,
+# dsh prints `patch: entry "mcp-engram" not found` and boots without the tools.
+#
+# Requires the `engram` binary on PATH (brew install gentleman-programming/tap/engram).
+# `--tools=agent` exposes only the 11 tools agents need (smaller tool schema in every request).
+# Tools appear as mcp__engram__mem_save, mcp__engram__mem_search, ...
+# serverName must match `memory.server_name` in .odd/config.yml.
+- insert:
+    - id: mcp-engram
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: engram
+        transport: stdio
+        command: engram
+        args: ['mcp', '--tools=agent']
+        # failOnStartupError: true   # uncomment while debugging a server that never starts

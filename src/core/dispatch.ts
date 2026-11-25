@@ -78,7 +78,7 @@ export async function dispatchPhase(
   let failure: string | undefined
   try {
     const res = await deps.client.run({
-      label: `${name}:${phase}`, prompt, outputSchema: REPORT_SCHEMA, role, toolDeny: effectiveDeny(role), signal,
+      label: `${name}:${phase}`, prompt, outputSchema: REPORT_SCHEMA, role, toolDeny: effectiveDeny(role, cfg.memory.server_name), signal,
     })
     if (res.stopReason !== 'completed') failure = `subagent ended with stopReason "${res.stopReason}"`
     else {

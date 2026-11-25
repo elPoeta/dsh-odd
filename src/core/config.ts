@@ -1,4 +1,5 @@
 import { parse } from 'yaml'
+import { memoryDeny } from './memory-tools'
 import type { TaskType } from './task'
 
 /** How one phase is dispatched to a clean-context subagent. */
@@ -14,8 +15,26 @@ export interface RoleConfig {
   /** Extra tool names to hide from the child. */
   tool_deny: string[]
   persona?: string
+  /**
+   * Engram access for the child: 'none' hides every mem_* tool (default: the child
+   * gets only its handoff packet), 'read' allows searching but never writing.
+   */
+  memory: 'none' | 'read'
   /** Orchestrator runs this itself after the subagent reports done; failure => failed. */
   verify_command?: string
+}
+
+/** Engram integration. Opt-in: the task md stays the source of truth, Engram is derived memory. */
+export interface MemoryConfig {
+  enabled: boolean
+  /** Must match `serverName` of the mcp-client row; tools are mcp__<server_name>__mem_*. */
+  server_name: string
+  scope: 'project' | 'personal'
+  /** Optional. When omitted Engram detects the project from the cwd. */
+  project?: string
+  /** Hard cap per saved observation. */
+  max_item_chars: number
+  recall_limit: number
 }
 
 export interface OddConfig {
@@ -33,6 +52,7 @@ export interface OddConfig {
   dispatch: Record<string, RoleConfig>
   /** Command whose stdout is the change set handed to reviewers. */
   diff_command: string
+  memory: MemoryConfig
 }
 
 /**
@@ -51,7 +71,7 @@ export const READONLY_DENY = [
 ]
 
 export const ROLE_DEFAULTS: RoleConfig = {
-  provider: 'spawn', readonly: true, include_diff: false, max_depth: 1, tool_deny: [],
+  provider: 'spawn', readonly: true, include_diff: false, max_depth: 1, tool_deny: [], memory: 'none',
 }
 
 /**
@@ -82,6 +102,7 @@ export const DEFAULT_CONFIG: OddConfig = {
     'code-review': { ...ROLE_DEFAULTS, include_diff: true },
   },
   diff_command: 'git diff HEAD',
+  memory: { enabled: false, server_name: 'engram', scope: 'project', max_item_chars: 1500, recall_limit: 5 },
 }
 
 export const DEFAULT_CONFIG_YAML = `# ODD configuration. Markdown task files are the source of truth.
@@ -112,11 +133,22 @@ dispatch:               # phases run in a clean-context subagent; others run inl
     include_diff: true
     max_depth: 1
     # tool_deny: []     # extra tools to hide
+    # memory: none     # none | read: whether the child may search Engram (it never writes)
     # verify_command: "" # orchestrator-run check after the child reports done
   # to disable: set a phase to null, e.g.  code-review: null
+memory:                 # Engram integration (opt-in). The task md stays the source of truth.
+  enabled: false
+  server_name: engram   # must match serverName of the @deepseek-ai/dsh-mcp-client row
+  scope: project        # project | personal
+  # project: ""         # optional; Engram detects it from the cwd when omitted
+  max_item_chars: 1500
+  recall_limit: 5
 `
 
-type RawConfig = Partial<Omit<OddConfig, 'dispatch'>> & { dispatch?: Record<string, Partial<RoleConfig> | null> }
+type RawConfig = Partial<Omit<OddConfig, 'dispatch' | 'memory'>> & {
+  dispatch?: Record<string, Partial<RoleConfig> | null>
+  memory?: Partial<MemoryConfig>
+}
 
 export function mergeConfig(user: RawConfig | null | undefined): OddConfig {
   const u = user ?? {}
@@ -133,6 +165,7 @@ export function mergeConfig(user: RawConfig | null | undefined): OddConfig {
     workflows: { ...DEFAULT_CONFIG.workflows, ...(u.workflows ?? {}) },
     review_loopback: { ...DEFAULT_CONFIG.review_loopback, ...(u.review_loopback ?? {}) },
     dispatch,
+    memory: { ...DEFAULT_CONFIG.memory, ...(u.memory ?? {}) },
   }
   validateConfig(cfg)
   return cfg
@@ -161,12 +194,22 @@ export function validateConfig(cfg: OddConfig): void {
     if (!allPhases.has(phase)) throw new Error(`dispatch."${phase}" is not a phase of any workflow`)
     if (!role.provider) throw new Error(`dispatch."${phase}".provider is required`)
     if (!Number.isInteger(role.max_depth) || role.max_depth < 0) throw new Error(`dispatch."${phase}".max_depth must be a non-negative integer`)
+    if (role.memory !== 'none' && role.memory !== 'read') throw new Error(`dispatch."${phase}".memory must be "none" or "read"`)
   }
+  const m = cfg.memory
+  if (!/^[A-Za-z0-9_-]{1,32}$/.test(m.server_name)) throw new Error('memory.server_name must match [A-Za-z0-9_-]{1,32}')
+  if (m.scope !== 'project' && m.scope !== 'personal') throw new Error('memory.scope must be "project" or "personal"')
+  if (!Number.isInteger(m.max_item_chars) || m.max_item_chars < 200) throw new Error('memory.max_item_chars must be an integer >= 200')
+  if (!Number.isInteger(m.recall_limit) || m.recall_limit < 1 || m.recall_limit > 20) throw new Error('memory.recall_limit must be 1-20')
 }
 
 /** Tools to hide from the child of this role (before intersecting with registered tools). */
-export function effectiveDeny(role: RoleConfig): string[] {
-  return [...new Set([...(role.readonly ? READONLY_DENY : []), ...role.tool_deny])]
+export function effectiveDeny(role: RoleConfig, memoryServer = 'engram'): string[] {
+  return [...new Set([
+    ...(role.readonly ? READONLY_DENY : []),
+    ...role.tool_deny,
+    ...memoryDeny(memoryServer, role.memory),
+  ])]
 }
 
 /**

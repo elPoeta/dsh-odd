@@ -64,12 +64,12 @@ describe('registration (verified shapes)', () => {
   it('registers every command and tool through ctx.effect with valid definitions', () => {
     const f = fakeCtx()
     registerAll(f.ctx, { cwd, rootDir: '.odd' })
-    expect([...f.commands.keys()].sort()).toEqual(['odd-init', 'odd-resume', 'odd-skills', 'odd-status'])
+    expect([...f.commands.keys()].sort()).toEqual(['odd-init', 'odd-memory', 'odd-resume', 'odd-skills', 'odd-status'])
     expect([...f.tools.keys()].sort()).toEqual([
-      'odd_dispatch', 'odd_skill_list', 'odd_skill_load', 'odd_task_advance', 'odd_task_answer',
-      'odd_task_archive', 'odd_task_create', 'odd_task_note', 'odd_task_read',
+      'odd_dispatch', 'odd_memory_capture', 'odd_memory_recall', 'odd_skill_list', 'odd_skill_load', 'odd_task_advance',
+      'odd_task_answer', 'odd_task_archive', 'odd_task_create', 'odd_task_note', 'odd_task_read',
     ])
-    expect(f.labels).toHaveLength(13)
+    expect(f.labels).toHaveLength(16)
     expect(f.commands.get('odd-resume').input).toEqual({ hint: '<task-name>' })
   })
 
@@ -188,3 +188,86 @@ describe('tools', () => {
     await expect(f.call('odd_dispatch', { name: 'x' }, {})).rejects.toThrow(/exec\.agent was undefined/)
   })
 })
+
+describe('Engram memory tools', () => {
+  const enable = async () => {
+    const { readFile } = await import('node:fs/promises')
+    const cfg = join(cwd, '.odd', 'config.yml')
+    await writeFile(cfg, (await readFile(cfg, 'utf8')).replace('  enabled: false', '  enabled: true'))
+  }
+  const mount = (f: ReturnType<typeof fakeCtx>) => {
+    for (const t of ['mem_save', 'mem_search', 'mem_get_observation', 'mem_context']) {
+      f.tools.set(`mcp__engram__${t}`, { name: `mcp__engram__${t}`, description: '', parameters: {} })
+    }
+  }
+
+  it('is disabled by default with an actionable error', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { cwd, rootDir: '.odd' })
+    await createTask(cwd, { name: 'a', type: 'feature' })
+    await expect(f.call('odd_memory_recall', { name: 'a' })).rejects.toThrow(/memory\.enabled: true/)
+    await expect(f.call('odd_memory_capture', { name: 'a' })).rejects.toThrow(/disabled/)
+    expect(await f.call('odd_task_create', { name: 'b', type: 'feature' })).not.toContain('Engram')
+  })
+
+  it('explains how to mount Engram when its tools are not registered', async () => {
+    await enable()
+    const f = fakeCtx()
+    registerAll(f.ctx, { cwd, rootDir: '.odd' })
+    await createTask(cwd, { name: 'a', type: 'feature' })
+    const out = await f.call('odd_memory_recall', { name: 'a' })
+    expect(out).toContain('Engram MCP tools missing')
+    expect(out).toContain('- insert:')
+    expect((await f.run('odd-memory')).text).toContain('@deepseek-ai/dsh-mcp-client')
+  })
+
+  it('recall returns the exact mem_* calls and the md-wins rule', async () => {
+    await enable()
+    const f = fakeCtx()
+    registerAll(f.ctx, { cwd, rootDir: '.odd' })
+    mount(f)
+    expect(await f.call('odd_task_create', { name: 'login', type: 'feature', goal: 'Sign in with Google OAuth' })).toContain('call odd_memory_recall')
+    const out = await f.call('odd_memory_recall', { name: 'login' })
+    expect(out).toContain('mcp__engram__mem_search')
+    expect(out).toContain('google')
+    expect(out).toMatch(/task file wins/)
+    expect((await f.run('odd-memory')).text).toContain('all required tools are registered')
+  })
+
+  it('capture: refuses open tasks, then prepares idempotent saves and traces them in the md', async () => {
+    await enable()
+    const f = fakeCtx()
+    registerAll(f.ctx, { cwd, rootDir: '.odd' })
+    mount(f)
+    await f.call('odd_task_create', { name: 'fix-it', type: 'hotfix', goal: 'crash on login' })
+    await expect(f.call('odd_memory_capture', { name: 'fix-it' })).rejects.toThrow(/is todo/)
+    await f.call('odd_task_note', { name: 'fix-it', section: 'Root cause', text: 'user was null after refresh' })
+    await f.call('odd_task_note', { name: 'fix-it', section: 'Lessons', text: '- Always null-check the refreshed user' })
+    await f.call('odd_task_note', { name: 'fix-it', section: 'Evidence', text: '- pnpm test => SECRET-EVIDENCE' })
+    for (let i = 0; i < 2; i++) await f.call('odd_task_advance', { name: 'fix-it', outcome: 'done', summary: 'ok' })
+    const last = await f.call('odd_task_advance', { name: 'fix-it', outcome: 'done', summary: 'shipped' })
+    expect(last).toContain('Task closed')
+    expect(last).toContain('Root cause')
+    const a = await f.call('odd_memory_capture', { name: 'fix-it' })
+    const b = await f.call('odd_memory_capture', { name: 'fix-it' })
+    expect(a).toBe(b)                                    // idempotent
+    expect(a).toContain('mcp__engram__mem_save')
+    expect(a).toContain('bug/fix-it-root-cause')
+    expect(a).toContain('odd/fix-it')
+    expect(a).not.toContain('SECRET-EVIDENCE')
+    const md = await f.call('odd_task_read', { name: 'fix-it' })
+    expect(md).toContain('## Memory')
+    expect(md.match(/odd\/fix-it \(/g)).toHaveLength(1)
+  })
+
+  it('a blocked task can be captured too', async () => {
+    await enable()
+    const f = fakeCtx()
+    registerAll(f.ctx, { cwd, rootDir: '.odd' })
+    mount(f)
+    await f.call('odd_task_create', { name: 'stuck', type: 'feature' })
+    expect(await f.call('odd_task_advance', { name: 'stuck', outcome: 'blocked', summary: 'needs infra' })).toContain('odd_memory_capture')
+    expect(await f.call('odd_memory_capture', { name: 'stuck' })).toContain('odd/stuck')
+  })
+})
+

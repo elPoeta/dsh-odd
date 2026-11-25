@@ -9,10 +9,12 @@ export interface TemplateVars {
   created: string
 }
 
-const COMMON_TAIL = `## Next step
+const tail = (extra = '') => `## Next step
 {{next_step}}
 
 ## Decisions
+${extra}
+## Lessons
 
 ## Handoffs
 
@@ -46,9 +48,9 @@ updated: {{created}}
 
 /** Default templates, one per task type. Override with .odd/templates/<type>.md */
 export const DEFAULT_TEMPLATES: Record<TaskType, string> = {
-  feature: HEAD + COMMON_TAIL,
-  hotfix: HEAD.replace('## Goal', '## Goal\n<!-- hotfix: describe the symptom, then the root cause once known -->') + COMMON_TAIL,
-  refactor: HEAD.replace('## Goal', '## Goal\n<!-- refactor: behavior must not change; list the safety net (tests) -->') + COMMON_TAIL,
+  feature: HEAD + tail(),
+  hotfix: HEAD.replace('## Goal', '## Goal\n<!-- hotfix: describe the symptom; record the cause under Root cause -->') + tail('\n## Root cause\n'),
+  refactor: HEAD.replace('## Goal', '## Goal\n<!-- refactor: behavior must not change; list the safety net (tests) -->') + tail(),
 }
 
 export function render(template: string, vars: Record<string, string>): string {

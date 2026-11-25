@@ -32,3 +32,10 @@ The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on 
 - Do not commit or push unless the human asks.
 - A dispatched subagent never writes the md and cannot see it; only you (the orchestrator) record results.
 - Do not edit the task file by hand; use the `odd_task_*` tools (they lock and validate).
+
+## Memory (only when Engram is enabled)
+Engram is derived memory. The task file is the source of truth: if they disagree, the task file wins.
+- Right after `odd_task_create` (the tool says when Engram is enabled): call `odd_memory_recall`, run the calls it lists, and use only what clearly applies. If a memory changes what you do, write it as a Decision in the task file and cite the observation id.
+- While working, record durable knowledge in the task file, not in Engram: `odd_task_note` with section `Decisions` (choices and why), `Lessons` (what you would tell the next person) and, for hotfixes, `Root cause`.
+- When the task is `done` or `blocked`: call `odd_memory_capture` and run the `mem_save` calls exactly as given. Do not add logs, test output, transcripts or secrets.
+- Subagents never see or write memory unless the project explicitly allows read access for a role.

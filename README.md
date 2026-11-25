@@ -3,7 +3,7 @@
 Organic-Driven Development orchestrator for DeepSeek Harness.
 **The markdown task file is the source of truth.** Agents are temporary executors.
 
-## Status: phase 3 (skill registry), hardened for dsh 0.2.2-rc.5
+## Status: phase 4 (Engram memory), on top of the phase 3 registry, targeting dsh 0.2.2-rc.5
 
 The orchestrator runs in the main agent. It reads and writes `.odd/tasks/<name>.md`
 through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases listed under
@@ -14,7 +14,7 @@ through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases liste
 | 1 | templates, config, md format, state machine, commands, tools | done |
 | 2 | subagent dispatch for `code-review` via `ctx.subagents` (spawn + outputSchema + toolFilter) | done |
 | 3 | skill registry (ODD project > project > user > built-in), validation, duplicate detection | this version |
-| 4 | Engram adapter (`odd/<task>` keys; md wins on conflict) | todo |
+| 4 | Engram memory: recall before a task, capture when it closes; md wins on conflict | this version |
 | 5 | auto gates, git worktrees, parallelism | todo |
 
 ## Layout it creates (`/odd-init`)
@@ -30,9 +30,10 @@ through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases liste
 
 ## Commands (human) and tools (model)
 
-Commands: `/odd-init`, `/odd-status`, `/odd-resume <task>`, `/odd-skills [check]`.
+Commands: `/odd-init`, `/odd-status`, `/odd-resume <task>`, `/odd-skills [check]`, `/odd-memory`.
 Tools: `odd_task_create`, `odd_task_read`, `odd_task_advance`, `odd_task_answer`,
-`odd_task_note`, `odd_task_archive`, `odd_dispatch`, `odd_skill_list`, `odd_skill_load`.
+`odd_task_note`, `odd_task_archive`, `odd_dispatch`, `odd_skill_list`, `odd_skill_load`,
+`odd_memory_recall`, `odd_memory_capture`.
 
 `/odd-resume <task>` now steers the agent into resuming (read `odd-orchestrator`, then the task file).
 
@@ -104,6 +105,53 @@ Default precedence, first match wins (`skills_paths` in `config.yml`):
 - Configs created by phase 1/2 keep their old `skills_paths` (two entries) and keep working. To adopt
   the new defaults, replace that list with the table above.
 
+## Engram memory (phase 4)
+
+**The md is the source of truth; Engram is derived memory.** If they disagree the task file wins, and the
+agent is told never to edit the task file from memory alone. Opt-in: `memory.enabled: true` in `.odd/config.yml`.
+
+### Mount Engram (one row, stdio only)
+
+Engram's MCP transport is stdio. Add `examples/engram.patch.yml` to your profile `cordis.patch.yml`
+(`/odd-memory` prints it too). It must sit inside `insert:`; a bare top-level row is an override of a row that
+doesn't exist, so dsh prints `patch: entry "mcp-engram" not found` and boots with no tools. Tools appear as
+`mcp__engram__mem_save`, `mcp__engram__mem_search`, ... and `memory.server_name` must equal the row's `serverName`.
+`--tools=agent` exposes only the 11 tools agents need, which keeps the tool schema small in every request.
+
+### Flow
+
+| When | Tool | What it does |
+|---|---|---|
+| after creating a task | `odd_memory_recall` | returns the exact `mem_context` / `mem_search` calls (keywords from title + goal; `decision` type for features, `bugfix` for hotfixes) and the md-wins rule |
+| while working | `odd_task_note` | durable knowledge goes into the task file: `Decisions`, `Lessons`, and `Root cause` (hotfix) |
+| task is `done` or `blocked` | `odd_memory_capture` | returns the exact `mem_save` calls, and traces the prepared keys in a `## Memory` section |
+
+The agent performs the Engram calls (ODD cannot confirm a save succeeded, so the md says "prepared").
+
+### What is saved, and what never is
+
+Topic keys follow Engram's convention (`family/description`, kebab-case, max 2 levels) and are deterministic,
+so re-running capture updates observations in place instead of duplicating them:
+
+| Source | topic_key | type |
+|---|---|---|
+| task digest | `odd/<task>` | `architecture` (`bugfix` for hotfixes) |
+| each bullet in `## Decisions` | `decision/<task>-<slug>-<hash6>` | `decision` |
+| `## Root cause` | `bug/<task>-root-cause` | `bugfix` |
+| each bullet in `## Lessons` | `learning/<task>-<slug>-<hash6>` | `discovery` |
+
+- **Never saved:** Log, Handoffs, Evidence, Open questions, Next step. History stays in the md, not in memory.
+- All saves use `capture_prompt: false` (Engram's recommendation for automated saves), scope `project` by default,
+  and `project` only if you set it (otherwise Engram detects it from the cwd).
+- **Secrets are redacted** (API keys, tokens, JWTs, private keys, `password=`/`token:` values) before anything is
+  derived, including the topic key. It is conservative pattern matching, not a DLP system: don't put secrets in
+  the task file. Items are capped at `memory.max_item_chars` and 25 per task.
+- Rewording a decision creates a new key (the old observation stays); a whitespace or case edit does not.
+- **Subagents get no Engram tools by default.** The reviewer's clean context is the point, and a "read-only"
+  child must not be able to `mem_save`. Set `memory: read` on a role to let it search; writers stay hidden.
+- New templates ship `## Lessons` (and `## Root cause` for hotfixes). Existing `.odd/templates/*.md` are not
+  overwritten; `odd_task_note` creates the sections on demand.
+
 ## Harness compatibility (target: dsh 0.2.2-rc.5)
 
 DSH is a developer preview and its API moves between rc releases. Pin it: `@deepseek-ai/dsh` is declared
@@ -122,7 +170,12 @@ Not yet executed on 0.2.2-rc.5 itself; do the smoke test below once.
 | `ctx.subagents.start(name, req)` | `prompt` as `{type:'text',text}` blocks, `parent`, `signal`, `outputSchema` (object root), `maxDepth`, `toolFilter` as `ToolRestriction { allow?, deny? }`; `run.result`, `run.dispose()` | `subagent-client.ts` |
 | `ctx.tools.schemas()` | global tool names, used to intersect the deny list (`restrict` rejects unknown names and empty filters) | `subagent-client.ts` |
 
-**Still an assumption:** `agent.steer([{ type: 'text', text }])` in `/odd-resume`. dsh-plan-mode documents using
+| Engram tools | `mcp__<serverName>__<tool>` via `@deepseek-ai/dsh-mcp-client` rows | `memory-tools.ts` |
+
+**Still an assumption:** the Engram parameter names (`title`, `content`, `type`, `scope`, `topic_key`, `project`,
+`capture_prompt` for `mem_save`; `query`, `type`, `project`, `limit` for `mem_search`) come from Engram's docs, not
+from a live server. The agent sees the real tool schema, so a rename would surface as a tool error, not a silent
+failure. Also: `agent.steer([{ type: 'text', text }])` in `/odd-resume`. dsh-plan-mode documents using
 `agent.steer()` with one user text block, but I did not see its signature. If it fails, `/odd-resume` falls back
 to printing the instruction for you to send, so nothing breaks.
 
@@ -134,7 +187,12 @@ to printing the instruction for you to send, so nothing breaks.
    tool result renders as text (this exercises `output.render`).
 4. `/odd-resume <name>`. Expect the agent to start by loading `odd-orchestrator`. If it prints "Tell the agent",
    `steer()` has a different signature: fix `steerAgent()` in `src/host/api.ts` (one function).
-5. With a valid `code-review` skill in `.odd/skills/`, advance the task to code-review and ask the agent to call
+5. (Engram) Mount the row from `examples/engram.patch.yml`, set `memory.enabled: true`, run `/odd-memory`:
+   it should say all required tools are registered (MCP tools connect asynchronously: retry after a moment).
+   Create a task: the result should end with the `odd_memory_recall` hint. Close a hotfix with a Root cause and a
+   Lesson, call `odd_memory_capture`, and have the agent run the `mcp__engram__mem_save` calls. Run capture
+   twice: Engram should show `revision_count` going up, not duplicate rows.
+6. With a valid `code-review` skill in `.odd/skills/`, advance the task to code-review and ask the agent to call
    `odd_dispatch`. Expect a Handoffs entry in the md. A failure here with `UNSUPPORTED_CAPABILITY` or an unknown
    tool name in the filter is recorded in the Log as a failed attempt (fail closed), not swallowed.
 

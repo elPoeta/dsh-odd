@@ -22,7 +22,11 @@ import { OUTCOMES, advance, resolveInput, type Outcome } from '../core/workflow'
 import {
   checkArgs, effect, fail, objectSchema, ok, steerAgent, textBlock, type AnyCtx, type PropSpec,
 } from './api'
-import { createSubagentClient } from './subagent-client'
+import {
+  assertCapturable, formatCapture, formatMemoryStatus, formatRecall, missingMemoryTools,
+  planCapture, planRecall, recordCapture, type CapturePlan,
+} from '../core/memory'
+import { createSubagentClient, registeredToolNames } from './subagent-client'
 
 export interface AdapterOptions {
   cwd: string
@@ -68,6 +72,11 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
     return `${formatSkillList(reg)}\n\nRoots (highest precedence first):\n${roots}`
   })
 
+  command('odd-memory', 'Show the Engram integration status and how to mount the MCP server', undefined, async () => {
+    const cfg = await loadConfig(cwd, rootDir)
+    return formatMemoryStatus(cfg.memory, registeredToolNames(ctx))
+  })
+
   command('odd-resume', 'Resume an ODD task: the agent reads the task file and continues from its Next step', '<task-name>', async ({ rawInput, agent }) => {
     if (!rawInput) throw new Error('Usage: /odd-resume <task-name>')
     const t = await readTask(cwd, rawInput, rootDir)
@@ -107,7 +116,12 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
 
   tool('odd_task_create', 'Create an ODD task markdown file (feature | hotfix | refactor).',
     { name: str, type: { type: 'string', enum: TASK_TYPES }, title: str, goal: str }, ['name', 'type'],
-    async (a) => serializeTask(await createTask(cwd, { name: a.name!, type: a.type as TaskType, title: a.title, goal: a.goal }, rootDir)))
+    async (a) => {
+      const task = await createTask(cwd, { name: a.name!, type: a.type as TaskType, title: a.title, goal: a.goal }, rootDir)
+      const hint = (await loadConfig(cwd, rootDir)).memory.enabled
+        ? '\n\n[odd] Engram is enabled: call odd_memory_recall for related past work before planning.' : ''
+      return serializeTask(task) + hint
+    })
 
   tool('odd_task_read', 'Read a task file. Always call this first when resuming work. The first line says whether the current phase runs inline or via odd_dispatch, and which skill applies.',
     { name: str }, ['name'],
@@ -139,7 +153,10 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
     async (a) => {
       const t = await mutateTask(cwd, a.name!, (task, cfg) =>
         advance(task, cfg, { outcome: a.outcome as Outcome, summary: a.summary!, question: a.question || undefined }), rootDir)
-      return `status=${t.frontmatter.status} phase=${t.frontmatter.phase} review_loops=${t.frontmatter.review_loops}`
+      const closed = t.frontmatter.status === 'done' || t.frontmatter.status === 'blocked'
+      const hint = closed && (await loadConfig(cwd, rootDir)).memory.enabled
+        ? `\n[odd] Task closed: record Decisions, Lessons${t.frontmatter.type === 'hotfix' ? ' and Root cause' : ''} in the task file, then call odd_memory_capture.` : ''
+      return `status=${t.frontmatter.status} phase=${t.frontmatter.phase} review_loops=${t.frontmatter.review_loops}${hint}`
     })
 
   tool('odd_task_answer', "Record the human's answer to a needs_input question and resume the phase.",
@@ -169,6 +186,39 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
     async (a) => {
       const entry = resolveSkill(await registry(), a.name!)
       return `# Skill: ${entry.name} (${entry.source})\n\n${await readSkillBody(entry)}`
+    })
+
+  const requireMemory = async () => {
+    const cfg = await loadConfig(cwd, rootDir)
+    if (!cfg.memory.enabled) {
+      throw new Error('Engram integration is disabled. Set memory.enabled: true in .odd/config.yml and mount the Engram MCP server (see /odd-memory).')
+    }
+    return cfg.memory
+  }
+
+  tool('odd_memory_recall', 'Plan Engram lookups for related past work (decisions, bug causes) before starting a task. Returns the exact mem_* calls to run. Memory is a hint: the task file always wins.',
+    { name: str }, ['name'],
+    async (a) => {
+      const mem = await requireMemory()
+      const missing = missingMemoryTools(mem.server_name, registeredToolNames(ctx))
+      if (missing && missing.length) return formatMemoryStatus(mem, registeredToolNames(ctx))
+      const task = await readTask(cwd, a.name!, rootDir)
+      return formatRecall(task, planRecall(task, mem), mem.server_name)
+    })
+
+  tool('odd_memory_capture', 'When a task is closed (done or blocked), prepare the Engram saves: decisions, root cause, lessons and a digest, with idempotent topic keys. Returns the exact mem_save calls to run. Never includes logs, evidence or transcripts.',
+    { name: str }, ['name'],
+    async (a) => {
+      const mem = await requireMemory()
+      const missing = missingMemoryTools(mem.server_name, registeredToolNames(ctx))
+      if (missing && missing.length) return formatMemoryStatus(mem, registeredToolNames(ctx))
+      let plan!: CapturePlan
+      const task = await mutateTask(cwd, a.name!, (t) => {
+        assertCapturable(t)
+        plan = planCapture(t, mem)
+        return recordCapture(t, plan)
+      }, rootDir)
+      return formatCapture(task, plan, mem.server_name)
     })
 
   tool('odd_task_archive', 'Move a finished task to .odd/tasks/archive/.',
