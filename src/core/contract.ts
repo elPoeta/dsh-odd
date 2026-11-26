@@ -14,6 +14,8 @@ export interface SubagentReport {
   tests_command?: string
   tests_result?: string
   decisions: string[]
+  /** Full write-up for the task file (markdown, ### headings only). */
+  details?: string
 }
 
 // Object-rooted and inside the host's enforced JSON Schema subset (guarded by tests/adapter.spec.ts).
@@ -29,12 +31,13 @@ export const REPORT_SCHEMA = {
     tests_command: { type: 'string' },
     tests_result: { type: 'string' },
     decisions: { type: 'array', items: { type: 'string' } },
+    details: { type: 'string' },
   },
   required: ['status', 'summary'],
 } as const
 
 /** Phases whose `done` must carry an explicit verdict. */
-export const VERDICT_PHASES = ['code-review']
+export const VERDICT_PHASES = ['code-review', 'verify']
 
 const STATUSES: ReportStatus[] = ['done', 'needs_input', 'blocked', 'failed']
 const VERDICTS: Verdict[] = ['approve', 'changes_requested']
@@ -53,7 +56,7 @@ export function parseReport(structured: unknown): SubagentReport {
   if (typeof o.summary !== 'string' || !o.summary.trim()) throw new Error('summary is required')
   if (o.verdict !== undefined && !VERDICTS.includes(o.verdict as Verdict)) throw new Error(`invalid verdict: ${String(o.verdict)}`)
   if (o.status === 'needs_input' && (typeof o.question !== 'string' || !o.question.trim())) throw new Error('needs_input requires a question')
-  for (const k of ['question', 'tests_command', 'tests_result'] as const) {
+  for (const k of ['question', 'tests_command', 'tests_result', 'details'] as const) {
     if (o[k] !== undefined && typeof o[k] !== 'string') throw new Error(`"${k}" must be a string`)
   }
   return {
@@ -66,6 +69,7 @@ export function parseReport(structured: unknown): SubagentReport {
     tests_command: o.tests_command as string | undefined,
     tests_result: o.tests_result as string | undefined,
     decisions: strArray(o.decisions, 'decisions'),
+    details: o.details as string | undefined,
   }
 }
 

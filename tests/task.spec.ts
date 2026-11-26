@@ -11,7 +11,7 @@ const fresh = () => renderTask('feature', DEFAULT_CONFIG, vars)
 describe('task markdown', () => {
   it('renders a valid task from the template', () => {
     const t = fresh()
-    expect(t.frontmatter).toMatchObject({ id: 'login-oauth', type: 'feature', status: 'todo', phase: 'grill' })
+    expect(t.frontmatter).toMatchObject({ id: 'login-oauth', type: 'feature', status: 'todo', phase: 'story' })
     expect(getSection(t.body, 'Goal')).toBe('Sign in with Google')
     expect(progress(t)).toEqual({ done: 0, total: 5 })
   })
@@ -37,8 +37,8 @@ describe('task markdown', () => {
 
   it('ticks checklist items by prefix', () => {
     const t = fresh()
-    const body = checkItem(t.body, 'Plan', 'grill')
-    expect(parseChecklist(getSection(body, 'Plan')!)[0]).toEqual({ done: true, text: 'grill' })
+    const body = checkItem(t.body, 'Plan', 'story')
+    expect(parseChecklist(getSection(body, 'Plan')!)[0]).toEqual({ done: true, text: 'story' })
   })
 
   it('rejects invalid frontmatter', () => {

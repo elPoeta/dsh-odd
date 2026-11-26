@@ -20,8 +20,10 @@ beforeEach(async () => {
   await mkdir(join(cwd, '.odd', 'skills', 'code-review'), { recursive: true })
   await writeFile(join(cwd, '.odd', 'skills', 'code-review', 'SKILL.md'), '---\nname: code-review\ndescription: Review a change set for bugs and missing tests\n---\nReview for bugs and missing tests.')
   await createTask(cwd, { name: 'login', type: 'feature', goal: 'Sign in with Google' })
-  // bring the task to code-review: grill, story, pair done
-  for (let i = 0; i < 3; i++) await mutateTask(cwd, 'login', (t, c) => advance(t, c, { outcome: 'done', summary: `step ${i}` }))
+  await mkdir(join(cwd, '.odd', 'skills', 'testing'), { recursive: true })
+  await writeFile(join(cwd, '.odd', 'skills', 'testing', 'SKILL.md'), '---\nname: testing\ndescription: test standards\n---\nTESTING STANDARDS')
+  // bring the task to code-review: story, pair done (feature workflow starts at story)
+  for (let i = 0; i < 2; i++) await mutateTask(cwd, 'login', (t, c) => advance(t, c, { outcome: 'done', summary: `step ${i}` }))
 })
 afterEach(() => rm(cwd, { recursive: true, force: true }))
 
@@ -40,10 +42,10 @@ class Fake implements SubagentClient {
 const completed = (structured: unknown): RunResult => ({ stopReason: 'completed', structured, outputText: '' })
 
 describe('dispatchPhase (code-review)', () => {
-  it('approve -> advances to ship and records handoff + decisions', async () => {
+  it('approve -> advances to verify and records handoff + decisions', async () => {
     const client = new Fake(completed({ status: 'done', verdict: 'approve', summary: 'clean', decisions: ['keep PKCE'] }))
     const r = await dispatchPhase({ client, exec: fakeExec() }, cwd, 'login', signal)
-    expect(r).toMatchObject({ outcome: 'done', status: 'in_progress', nextPhase: 'ship' })
+    expect(r).toMatchObject({ outcome: 'done', status: 'in_progress', nextPhase: 'verify' })
     const t = await readTask(cwd, 'login')
     expect(getSection(t.body, 'Handoffs')).toContain('code-review -> spawn')
     expect(getSection(t.body, 'Handoffs')).toContain('skill: code-review@.odd/skills')

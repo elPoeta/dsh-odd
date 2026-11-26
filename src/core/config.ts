@@ -14,6 +14,14 @@ export interface RoleConfig {
   max_depth: number
   /** Extra tool names to hide from the child. */
   tool_deny: string[]
+  /**
+   * Read-only roles normally lose the shell. A role that must RUN things to observe behavior
+   * (verify) keeps bash/pwsh but still cannot write or edit files through tools. A shell can
+   * write, so this is guidance plus tool-level hiding, not a sandbox.
+   */
+  allow_shell: boolean
+  /** Extra skills embedded in the handoff packet next to the phase skill (e.g. "testing"). */
+  skills: string[]
   persona?: string
   /**
    * Engram access for the child: 'none' hides every mem_* tool (default: the child
@@ -76,15 +84,17 @@ export interface OddConfig {
 /** Tokens usable in skills_paths. {project} = nearest .git ancestor (or cwd), like DSH itself. */
 export const SKILL_PATH_TOKENS = ['project', 'dsh_home', 'agents_home']
 
+export const SHELL_TOOLS = ['bash', 'pwsh']
+
 export const READONLY_DENY = [
-  'write', 'edit', 'str_replace_editor', 'bash', 'pwsh',
-  'subagent',
+  'write', 'edit', 'apply_patch', 'str_replace_editor', 'bash', 'pwsh',
+  'subagent', 'subagent_fork', 'ask_user_question',
   'odd_task_create', 'odd_task_read', 'odd_task_advance', 'odd_task_answer',
   'odd_task_note', 'odd_task_archive', 'odd_dispatch',
 ]
 
 export const ROLE_DEFAULTS: RoleConfig = {
-  provider: 'spawn', readonly: true, include_diff: false, max_depth: 1, tool_deny: [], memory: 'none',
+  provider: 'spawn', readonly: true, include_diff: false, max_depth: 1, tool_deny: [], allow_shell: false, skills: [], memory: 'none',
 }
 
 /**
@@ -105,14 +115,16 @@ export const DEFAULT_CONFIG: OddConfig = {
   mode: 'manual',
   limits: { max_review_loops: 3, max_step_retries: 2 },
   workflows: {
-    feature: ['grill', 'story', 'pair', 'code-review', 'ship'],
-    hotfix: ['fix', 'code-review', 'ship'],
+    plan: ['grill', 'backlog', 'to-tickets'],
+    feature: ['story', 'pair', 'code-review', 'verify', 'ship'],
+    hotfix: ['fix', 'code-review', 'verify', 'ship'],
     refactor: ['refactor', 'code-review', 'ship'],
   },
-  review_loopback: { feature: 'pair', hotfix: 'fix', refactor: 'refactor' },
+  review_loopback: { plan: 'backlog', feature: 'pair', hotfix: 'fix', refactor: 'refactor' },
   skills_paths: [...DEFAULT_SKILLS_PATHS],
   dispatch: {
-    'code-review': { ...ROLE_DEFAULTS, include_diff: true },
+    'code-review': { ...ROLE_DEFAULTS, include_diff: true, skills: ['testing'] },
+    verify: { ...ROLE_DEFAULTS, allow_shell: true },
   },
   phase_skills: {},
   diff_command: 'git diff HEAD',
@@ -127,10 +139,12 @@ limits:
   max_review_loops: 3   # pair <-> code-review iterations before the task is blocked
   max_step_retries: 2   # failed retries per phase before the task is blocked
 workflows:
-  feature: [grill, story, pair, code-review, ship]
-  hotfix: [fix, code-review, ship]
+  plan: [grill, backlog, to-tickets]   # an idea becomes tickets; each ticket is a feature task
+  feature: [story, pair, code-review, verify, ship]
+  hotfix: [fix, code-review, verify, ship]
   refactor: [refactor, code-review, ship]
-review_loopback:
+review_loopback:       # where a failed review or verification sends the task back to
+  plan: backlog
   feature: pair
   hotfix: fix
   refactor: refactor
@@ -149,9 +163,15 @@ dispatch:               # phases run in a clean-context subagent; others run inl
     readonly: true      # hides write/edit/shell/delegation/odd tools from the child
     include_diff: true
     max_depth: 1
+    skills: [testing]   # extra skills embedded in the packet (the child cannot load skills itself)
     # tool_deny: []     # extra tools to hide
-    # memory: none     # none | read: whether the child may search Engram (it never writes)
+    # memory: none      # none | read: whether the child may search Engram (it never writes)
     # verify_command: "" # orchestrator-run check after the child reports done
+  verify:
+    provider: spawn
+    readonly: true      # no write/edit tools...
+    allow_shell: true   # ...but it may run commands to observe behavior (curl, the app, the CLI)
+    include_diff: false # it judges behavior, not the diff
   # to disable: set a phase to null, e.g.  code-review: null
 bootstrap:
   agents_md: true       # managed ODD block in AGENTS.md: sessions in this project act as the orchestrator
@@ -177,7 +197,7 @@ export function mergeConfig(user: RawConfig | null | undefined): OddConfig {
   const rawDispatch = { ...DEFAULT_CONFIG.dispatch, ...(u.dispatch ?? {}) } as Record<string, Partial<RoleConfig> | null>
   for (const [phase, role] of Object.entries(rawDispatch)) {
     if (role === null || role === undefined) continue
-    dispatch[phase] = { ...ROLE_DEFAULTS, ...role } as RoleConfig
+    dispatch[phase] = { ...ROLE_DEFAULTS, ...(DEFAULT_CONFIG.dispatch[phase] ?? {}), ...role } as RoleConfig
   }
   const cfg: OddConfig = {
     ...DEFAULT_CONFIG,
@@ -218,6 +238,10 @@ export function validateConfig(cfg: OddConfig): void {
     if (!role.provider) throw new Error(`dispatch."${phase}".provider is required`)
     if (!Number.isInteger(role.max_depth) || role.max_depth < 0) throw new Error(`dispatch."${phase}".max_depth must be a non-negative integer`)
     if (role.memory !== 'none' && role.memory !== 'read') throw new Error(`dispatch."${phase}".memory must be "none" or "read"`)
+    if (typeof role.allow_shell !== 'boolean') throw new Error(`dispatch."${phase}".allow_shell must be true or false`)
+    if (!Array.isArray(role.skills) || role.skills.some((n) => typeof n !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(n))) {
+      throw new Error(`dispatch."${phase}".skills must be a list of skill names`)
+    }
   }
   for (const [phase, skill] of Object.entries(cfg.phase_skills)) {
     if (!allPhases.has(phase)) throw new Error(`phase_skills."${phase}" is not a phase of any workflow`)
@@ -242,7 +266,7 @@ export function skillFor(cfg: OddConfig, phase: string): string {
 /** Tools to hide from the child of this role (before intersecting with registered tools). */
 export function effectiveDeny(role: RoleConfig, memoryServer = 'engram'): string[] {
   return [...new Set([
-    ...(role.readonly ? READONLY_DENY : []),
+    ...(role.readonly ? READONLY_DENY.filter((n) => !(role.allow_shell && SHELL_TOOLS.includes(n))) : []),
     ...role.tool_deny,
     ...memoryDeny(memoryServer, role.memory),
   ])]

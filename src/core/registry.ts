@@ -217,6 +217,13 @@ export function checkRegistry(reg: Registry, cfg: OddConfig): CheckReport {
       issues.push({ severity: 'error', code: 'phase-skill-invalid', message: `Phase "${phase}" resolves to an invalid skill`, path: first.path })
     }
   }
+  for (const [phase, role] of Object.entries(cfg.dispatch)) {
+    for (const name of role.skills) {
+      const first = reg.byName.get(name)?.[0]
+      if (!first) issues.push({ severity: 'error', code: 'missing-skill', message: `Phase "${phase}" embeds the reference skill "${name}" in its handoff, but it does not exist` })
+      else if (!first.valid) issues.push({ severity: 'error', code: 'phase-skill-invalid', message: `Reference skill "${name}" (used by phase "${phase}") is invalid`, path: first.path })
+    }
+  }
   return {
     errors: issues.filter((i) => i.severity === 'error').length,
     warnings: issues.filter((i) => i.severity === 'warning').length,

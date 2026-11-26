@@ -41,16 +41,15 @@ describe('store', () => {
   it('RESUME: state survives across "sessions" (re-read from disk)', async () => {
     await initOdd(cwd)
     await createTask(cwd, { name: 'login-oauth', type: 'feature', goal: 'Sign in' })
-    // session 1: finish grill and story, then stop
-    await mutateTask(cwd, 'login-oauth', (t, c) => advance(t, c, { outcome: 'done', summary: 'plan agreed' }))
-    await mutateTask(cwd, 'login-oauth', (t, c) => advance(t, c, { outcome: 'done', summary: '3 stories' }))
+    // session 1: finish the story phase, then stop
+    await mutateTask(cwd, 'login-oauth', (t, c) => advance(t, c, { outcome: 'done', summary: '3 criteria agreed' }))
     // session 2: a brand new process only has the file
     const resumed = await readTask(cwd, 'login-oauth')
     expect(resumed.frontmatter.phase).toBe('pair')
-    expect(getSection(resumed.body, 'Next step')).toContain('3 stories')
+    expect(getSection(resumed.body, 'Next step')).toContain('3 criteria agreed')
     const [s] = await listTasks(cwd)
-    expect(s).toMatchObject({ id: 'login-oauth', phase: 'pair', done: 2, total: 5 })
-    expect(formatStatus([s!])).toContain('2/5')
+    expect(s).toMatchObject({ id: 'login-oauth', phase: 'pair', done: 1, total: 5 })
+    expect(formatStatus([s!])).toContain('1/5')
   })
 
   it('serializes concurrent writers with the lock', async () => {
@@ -67,7 +66,7 @@ describe('store', () => {
     await initOdd(cwd)
     await createTask(cwd, { name: 'h', type: 'hotfix' })
     await expect(archiveTask(cwd, 'h')).rejects.toThrow(/done/)
-    for (let i = 0; i < 3; i++) await mutateTask(cwd, 'h', (t, c) => advance(t, c, { outcome: 'done', summary: 'ok' }))
+    for (let i = 0; i < 4; i++) await mutateTask(cwd, 'h', (t, c) => advance(t, c, { outcome: 'done', summary: 'ok' }))
     expect(await archiveTask(cwd, 'h')).toContain('archive')
     expect(await listTasks(cwd)).toEqual([])
   })

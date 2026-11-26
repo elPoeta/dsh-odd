@@ -67,10 +67,10 @@ describe('registration (verified shapes)', () => {
     expect([...f.commands.keys()].sort()).toEqual(['odd-init', 'odd-memory', 'odd-resume', 'odd-skills', 'odd-status'])
     expect([...f.tools.keys()].sort()).toEqual([
       'odd_dispatch', 'odd_init', 'odd_memory_capture', 'odd_memory_recall', 'odd_skill_list', 'odd_skill_load',
-      'odd_task_advance', 'odd_task_answer', 'odd_task_archive', 'odd_task_create', 'odd_task_list', 'odd_task_note',
-      'odd_task_read',
+      'odd_task_advance', 'odd_task_answer', 'odd_task_archive', 'odd_task_check', 'odd_task_create', 'odd_task_list',
+      'odd_task_note', 'odd_task_read', 'odd_task_unblock',
     ])
-    expect(f.labels).toHaveLength(18)
+    expect(f.labels).toHaveLength(20)
     expect(f.commands.get('odd-resume').input).toEqual({ hint: '<task-name>' })
   })
 
@@ -143,10 +143,10 @@ describe('tools', () => {
     const f = fakeCtx()
     registerAll(f.ctx, { cwd, rootDir: '.odd' })
     await createTask(cwd, { name: 'login', type: 'feature', goal: 'g' })
-    expect(await f.call('odd_task_read', { name: 'login' })).toMatch(/^\[odd\] phase=grill mode=inline skill=MISSING/)
-    await mkdir(join(cwd, '.odd', 'skills', 'grill'), { recursive: true })
-    await writeFile(join(cwd, '.odd', 'skills', 'grill', 'SKILL.md'), '---\nname: grill\ndescription: plan an idea\n---\nASK HARD QUESTIONS')
-    expect(await f.call('odd_task_read', { name: 'login' })).toMatch(/skill=grill@\.odd\/skills -> run it inline: call odd_skill_load/)
+    expect(await f.call('odd_task_read', { name: 'login' })).toMatch(/^\[odd\] phase=story mode=inline skill=MISSING/)
+    await mkdir(join(cwd, '.odd', 'skills', 'story'), { recursive: true })
+    await writeFile(join(cwd, '.odd', 'skills', 'story', 'SKILL.md'), '---\nname: story\ndescription: refine a story\n---\nREFINE IT')
+    expect(await f.call('odd_task_read', { name: 'login' })).toMatch(/skill=story@\.odd\/skills -> run it inline: call odd_skill_load/)
   })
 
   it('odd_skill_load returns the project skill body with its source', async () => {
@@ -245,7 +245,7 @@ describe('Engram memory tools', () => {
     await f.call('odd_task_note', { name: 'fix-it', section: 'Root cause', text: 'user was null after refresh' })
     await f.call('odd_task_note', { name: 'fix-it', section: 'Lessons', text: '- Always null-check the refreshed user' })
     await f.call('odd_task_note', { name: 'fix-it', section: 'Evidence', text: '- pnpm test => SECRET-EVIDENCE' })
-    for (let i = 0; i < 2; i++) await f.call('odd_task_advance', { name: 'fix-it', outcome: 'done', summary: 'ok' })
+    for (let i = 0; i < 3; i++) await f.call('odd_task_advance', { name: 'fix-it', outcome: 'done', summary: 'ok' })
     const last = await f.call('odd_task_advance', { name: 'fix-it', outcome: 'done', summary: 'shipped' })
     expect(last).toContain('Task closed')
     expect(last).toContain('Root cause')
@@ -339,7 +339,7 @@ describe('autonomy: the orchestrator sets itself up', () => {
     registerAll(f.ctx, { rootDir: '.odd', home })
     const out = await f.call('odd_task_create', { name: 'login', type: 'feature', goal: 'Sign in' }, exec())
     expect(out).toContain('ODD was not set up')
-    expect(out).toContain('phase: grill')
+    expect(out).toContain('phase: story')
     expect(await f.call('odd_task_read', { name: 'login' }, exec())).toContain('# login')
   })
 
@@ -447,10 +447,10 @@ describe('missing skills do not corrupt the task (regression from a real session
     registerAll(f.ctx, { rootDir: '.odd', home })
     await f.call('odd_task_create', { name: 'game', type: 'feature', goal: 'a game' }, exec())
     const header = (await f.call('odd_task_read', { name: 'game' }, exec())).split('\n')[0]!
-    expect(header).toContain('skill=MISSING "grill"')
+    expect(header).toContain('skill=MISSING "story"')
     expect(header).toContain('do not change the task state')
     const after = await f.call('odd_task_list', {}, exec())
-    expect(after).toContain('game [feature] todo / grill')            // still todo: nothing advanced it
+    expect(after).toContain('game [feature] todo / story')            // still todo: nothing advanced it
   })
 
   it('with the builtin skills installed the same task just works', async () => {
@@ -459,8 +459,8 @@ describe('missing skills do not corrupt the task (regression from a real session
     registerAll(f.ctx, { rootDir: '.odd', home, builtinDirs: [builtin] })
     await f.call('odd_task_create', { name: 'game', type: 'feature', goal: 'a game' }, exec())
     const header = (await f.call('odd_task_read', { name: 'game' }, exec())).split('\n')[0]!
-    expect(header).toContain('skill=grill@builtin')
-    expect(await f.call('odd_skill_load', { name: 'grill' }, exec())).toContain('Grill: reach a shared plan')
+    expect(header).toContain('skill=story@builtin')
+    expect(await f.call('odd_skill_load', { name: 'story' }, exec())).toContain('We refine a single story')
   })
 
   it('the header names the mapped skill', async () => {
@@ -469,12 +469,12 @@ describe('missing skills do not corrupt the task (regression from a real session
     await f.call('odd_task_create', { name: 'game', type: 'feature' }, exec())
     const { readFile } = await import('node:fs/promises')
     const cfgPath = join(proj, '.odd', 'config.yml')
-    await writeFile(cfgPath, (await readFile(cfgPath, 'utf8')) + '\nphase_skills:\n  grill: grill-me\n')
-    await mkdir(join(proj, '.odd', 'skills', 'grill-me'), { recursive: true })
-    await writeFile(join(proj, '.odd', 'skills', 'grill-me', 'SKILL.md'), '---\nname: grill-me\ndescription: mine\n---\nMINE')
+    await writeFile(cfgPath, (await readFile(cfgPath, 'utf8')) + '\nphase_skills:\n  story: story-me\n')
+    await mkdir(join(proj, '.odd', 'skills', 'story-me'), { recursive: true })
+    await writeFile(join(proj, '.odd', 'skills', 'story-me', 'SKILL.md'), '---\nname: story-me\ndescription: mine\n---\nMINE')
     const header = (await f.call('odd_task_read', { name: 'game' }, exec())).split('\n')[0]!
-    expect(header).toContain('skill=grill-me@.odd/skills')
-    expect(header).toContain('odd_skill_load with "grill-me"')
+    expect(header).toContain('skill=story-me@.odd/skills')
+    expect(header).toContain('odd_skill_load with "story-me"')
   })
 })
 

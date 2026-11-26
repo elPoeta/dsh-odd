@@ -4,7 +4,7 @@ import { applyAgentsMd } from './bootstrap'
 import { DEFAULT_CONFIG_YAML, mergeConfig, parseConfig, type OddConfig } from './config'
 import { DEFAULT_TEMPLATES } from './templates'
 import { renderTask } from './templates'
-import { NAME_RE, TASK_TYPES, parseTask, progress, serializeTask, type Task, type TaskType } from './task'
+import { NAME_RE, TASK_TYPES, appendLog, parseTask, progress, serializeTask, type Task, type TaskType } from './task'
 
 const exists = (p: string) => stat(p).then(() => true, () => false)
 
@@ -101,7 +101,10 @@ async function writeAtomic(file: string, content: string) {
   await rename(tmp, file)
 }
 
-export interface CreateTaskInput { name: string; type: TaskType; title?: string; goal?: string; branch?: string }
+export interface CreateTaskInput {
+  name: string; type: TaskType; title?: string; goal?: string; branch?: string; phase?: string
+  parent?: string; blockedBy?: string[]
+}
 
 export async function createTask(cwd: string, input: CreateTaskInput, rootDir?: string, now = new Date()): Promise<Task> {
   const cfg = await loadConfig(cwd, rootDir)
@@ -110,14 +113,31 @@ export async function createTask(cwd: string, input: CreateTaskInput, rootDir?: 
   const p = paths(cwd, rootDir)
   const custom = join(p.templates, `${input.type}.md`)
   const template = (await exists(custom)) ? await readFile(custom, 'utf8') : undefined
-  const prefix = { feature: 'feat', hotfix: 'fix', refactor: 'refactor' }[input.type]
-  const task = renderTask(input.type, cfg, {
+  const prefix = { feature: 'feat', hotfix: 'fix', refactor: 'refactor', plan: 'plan' }[input.type]
+  const blockedBy = [...new Set((input.blockedBy ?? []).map((b) => b.trim()).filter(Boolean))]
+  for (const id of [...blockedBy, ...(input.parent ? [input.parent] : [])]) {
+    if (!NAME_RE.test(id)) throw new Error(`Invalid task id "${id}"`)
+    if (id === input.name) throw new Error('A task cannot block itself or be its own parent')
+    if ((await taskState(cwd, id, rootDir)) === 'missing') {
+      throw new Error(`Task "${id}" does not exist. Create blockers and parents first, in dependency order.`)
+    }
+  }
+  const created = renderTask(input.type, cfg, {
     id: input.name,
     title: input.title ?? input.name,
     goal: input.goal ?? '',
     branch: input.branch ?? `${prefix}/${input.name}`,
     created: now.toISOString(),
+    start_phase: input.phase || undefined,
   }, template)
+  const task: Task = {
+    ...created,
+    frontmatter: {
+      ...created.frontmatter,
+      ...(input.parent ? { parent: input.parent } : {}),
+      ...(blockedBy.length ? { blocked_by: blockedBy } : {}),
+    },
+  }
   await withLock(file, () => writeAtomic(file, serializeTask(task)))
   return task
 }
@@ -143,6 +163,44 @@ export async function mutateTask(cwd: string, name: string, fn: (t: Task, cfg: O
   })
 }
 
+export type BlockerState = 'done' | 'open' | 'missing'
+
+/** done = finished (active or archived); open = exists but not done; missing = no such task. */
+export async function taskState(cwd: string, id: string, rootDir?: string): Promise<BlockerState> {
+  const p = paths(cwd, rootDir)
+  if (await exists(join(p.archive, `${id}.md`))) return 'done'
+  const file = join(p.tasks, `${id}.md`)
+  if (!(await exists(file))) return 'missing'
+  return parseTask(await readFile(file, 'utf8')).frontmatter.status === 'done' ? 'done' : 'open'
+}
+
+export interface Blocker { id: string; state: BlockerState }
+
+/** Blockers that are not finished yet. Empty = the task can be worked. */
+export async function unresolvedBlockers(cwd: string, task: Task, rootDir?: string): Promise<Blocker[]> {
+  const out: Blocker[] = []
+  for (const id of task.frontmatter.blocked_by ?? []) {
+    const state = await taskState(cwd, id, rootDir)
+    if (state !== 'done') out.push({ id, state })
+  }
+  return out
+}
+
+export function formatBlockers(blockers: Blocker[]): string {
+  return blockers.map((b) => `${b.id} (${b.state === 'missing' ? 'missing' : 'not done'})`).join(', ')
+}
+
+/** Remove a dependency edge (the blocker was dropped, merged or is no longer needed). Logged. */
+export async function unblockTask(cwd: string, name: string, blocker: string, rootDir?: string): Promise<Task> {
+  return mutateTask(cwd, name, (t) => {
+    const edges = t.frontmatter.blocked_by ?? []
+    if (!edges.includes(blocker)) throw new Error(`"${name}" is not blocked by "${blocker}" (blocked by: ${edges.join(', ') || 'nothing'})`)
+    const rest = edges.filter((e) => e !== blocker)
+    const { blocked_by: _drop, ...fm } = t.frontmatter
+    return appendLog({ ...t, frontmatter: { ...fm, ...(rest.length ? { blocked_by: rest } : {}), updated: new Date().toISOString() } as Task['frontmatter'] }, 'human', `dependency removed: no longer blocked by ${blocker}`)
+  }, rootDir)
+}
+
 export interface TaskSummary {
   id: string
   type: TaskType
@@ -151,6 +209,8 @@ export interface TaskSummary {
   done: number
   total: number
   nextStep: string
+  parent?: string
+  blockers: Blocker[]
 }
 
 export async function listTasks(cwd: string, rootDir?: string): Promise<TaskSummary[]> {
@@ -161,7 +221,10 @@ export async function listTasks(cwd: string, rootDir?: string): Promise<TaskSumm
     const t = parseTask(await readFile(join(dir, f), 'utf8'))
     const { done, total } = progress(t)
     const next = /## Next step\n([\s\S]*?)(\n## |$)/.exec(t.body)?.[1]?.trim() ?? ''
-    out.push({ id: t.frontmatter.id, type: t.frontmatter.type, status: t.frontmatter.status, phase: t.frontmatter.phase, done, total, nextStep: next })
+    out.push({
+      id: t.frontmatter.id, type: t.frontmatter.type, status: t.frontmatter.status, phase: t.frontmatter.phase, done, total, nextStep: next,
+      parent: t.frontmatter.parent, blockers: await unresolvedBlockers(cwd, t, rootDir),
+    })
   }
   return out
 }
@@ -177,7 +240,13 @@ export async function archiveTask(cwd: string, name: string, rootDir?: string): 
 
 export function formatStatus(tasks: TaskSummary[]): string {
   if (!tasks.length) return 'No active ODD tasks.'
-  return tasks
-    .map((t) => `- ${t.id} [${t.type}] ${t.status} / ${t.phase} (${t.done}/${t.total})\n    next: ${t.nextStep}`)
-    .join('\n')
+  const open = (t: TaskSummary) => t.status !== 'done'
+  const lines = tasks.map((t) => {
+    const blocked = open(t) && t.blockers.length ? `  BLOCKED by ${formatBlockers(t.blockers)}` : ''
+    const parent = t.parent ? `  (from ${t.parent})` : ''
+    return `- ${t.id} [${t.type}] ${t.status} / ${t.phase} (${t.done}/${t.total})${parent}${blocked}\n    next: ${t.nextStep}`
+  })
+  const ready = tasks.filter((t) => open(t) && t.status !== 'needs_input' && t.status !== 'blocked' && !t.blockers.length).map((t) => t.id)
+  const footer = tasks.length > 1 ? `\nReady to work (no pending blockers): ${ready.join(', ') || 'none'}` : ''
+  return lines.join('\n') + footer
 }

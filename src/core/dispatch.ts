@@ -43,6 +43,10 @@ export function phaseMode(cfg: OddConfig, phase: string): 'subagent' | 'inline' 
   return cfg.dispatch[phase] ? 'subagent' : 'inline'
 }
 
+/** Where a phase's full report lands in the task file. */
+const REPORT_SECTIONS: Record<string, string> = { 'code-review': 'Reviews', verify: 'Verification' }
+const MAX_DETAILS_CHARS = 8000
+
 const clip = (s: string, n = 2000) => (s.length > n ? s.slice(0, n) + '…' : s)
 
 /**
@@ -63,6 +67,8 @@ export async function dispatchPhase(
   const role = cfg.dispatch[phase]
   if (!role) throw new Error(`Phase "${phase}" is not dispatchable (no dispatch.${phase} in config). Run it inline.`)
   const skill = await loadResolvedSkill(cwd, cfg, skillFor(cfg, phase), { builtinDirs: deps.builtinDirs })
+  const extraSkills = []
+  for (const name of role.skills) extraSkills.push(await loadResolvedSkill(cwd, cfg, name, { builtinDirs: deps.builtinDirs }))
 
   let diff: string | undefined
   let diffError: string | undefined
@@ -71,7 +77,7 @@ export async function dispatchPhase(
     if (d.code === 0) diff = d.output
     else { diff = ''; diffError = `\`${cfg.diff_command}\` exited ${d.code}` }
   }
-  const prompt = buildPacket({ task, phase, skillName: skill.name, skillText: skill.text, role, diff, diffError })
+  const prompt = buildPacket({ task, phase, skillName: skill.name, skillText: skill.text, extraSkills, role, diff, diffError })
 
   // ---- run the child; every failure mode becomes a recorded outcome
   let report: SubagentReport | undefined
@@ -110,8 +116,9 @@ export async function dispatchPhase(
   }
   if (report) for (const f of report.findings) evidence.push(`- ${phase} finding (loop ${task.frontmatter.review_loops + 1}): ${f}`)
 
+  const extras = extraSkills.length ? ` +${extraSkills.map((x) => `${x.name}@${x.source}`).join(',')}` : ''
   const handoff =
-    `- ${now().toISOString()} ${phase} -> ${role.provider} (skill: ${skill.name}@${skill.source}, packet: ${prompt.length} chars` +
+    `- ${now().toISOString()} ${phase} -> ${role.provider} (skill: ${skill.name}@${skill.source}${extras}, packet: ${prompt.length} chars` +
     `${diff !== undefined ? `, diff: ${diff.length} chars` : ''}) => ${input.outcome}: ${clip(input.summary, 300)}`
 
   const after = await mutateTask(cwd, name, (t: Task, c) => {
@@ -121,6 +128,12 @@ export async function dispatchPhase(
     let next = { ...t, body: appendToSection(t.body, 'Handoffs', handoff) }
     for (const d of report?.decisions ?? []) next = { ...next, body: appendToSection(next.body, 'Decisions', `- ${d} (from ${phase})`) }
     for (const e of evidence) next = { ...next, body: appendToSection(next.body, 'Evidence', e) }
+    // The full write-up (review / verification) is part of the trace, kept apart from the compact Evidence lines.
+    if (report?.details?.trim()) {
+      const section = REPORT_SECTIONS[phase] ?? 'Reviews'
+      const entry = `### ${phase} (loop ${t.frontmatter.review_loops + 1}, ${now().toISOString()})\n${clip(report.details.trim(), MAX_DETAILS_CHARS)}`
+      next = { ...next, body: appendToSection(next.body, section, entry) }
+    }
     return advance(next, c, input, now())
   }, rootDir)
 

@@ -1,5 +1,5 @@
 import type { OddConfig } from './config'
-import { appendLog, appendToSection, checkItem, setNextStep, type Frontmatter, type Task } from './task'
+import { appendLog, appendToSection, checkItem, checkLastUnchecked, setNextStep, type Frontmatter, type Task } from './task'
 
 /** Contract returned by a subagent (or by the main agent in phase 1). */
 export type Outcome = 'done' | 'needs_input' | 'blocked' | 'failed' | 'changes_requested'
@@ -83,7 +83,12 @@ export function advance(task: Task, cfg: OddConfig, input: AdvanceInput, now = n
 /** The human answered a pending question: resume the same phase. */
 export function resolveInput(task: Task, answer: string, now = new Date()): Task {
   if (task.frontmatter.status !== 'needs_input') throw new Error('Task is not waiting for input')
-  let next = appendLog(task, 'human', `answered: ${answer}`, now)
+  // The answer must reach the next executor: dispatched phases only see curated sections
+  // (never Log or Open questions), so it is also recorded under "Answers" and the question is closed.
+  const closed = checkLastUnchecked(task.body, 'Open questions')
+  let next: Task = { ...task, body: closed.body }
+  next = { ...next, body: appendToSection(next.body, 'Answers', `- [${next.frontmatter.phase}] Q: ${closed.text ?? 'question'} A: ${answer}`) }
+  next = appendLog(next, 'human', `answered: ${answer}`, now)
   next = { ...next, frontmatter: { ...next.frontmatter, status: 'in_progress', updated: now.toISOString() } }
   return setNextStep(next, `Re-run phase "${next.frontmatter.phase}" with the human's answer: ${answer}`)
 }

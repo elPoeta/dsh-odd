@@ -24,9 +24,13 @@ import {
   SkillError, checkRegistry, formatCheck, formatSkillList, readSkillBody, resolveSkill, scanRegistry,
 } from '../core/registry'
 import {
-  archiveTask, createTask, formatStatus, initOdd, isInitialized, listTasks, loadConfig, mutateTask, readTask,
+  archiveTask, createTask, formatBlockers, formatStatus, initOdd, isInitialized, listTasks, loadConfig, mutateTask, readTask,
+  unblockTask, unresolvedBlockers,
 } from '../core/store'
-import { TASK_TYPES, appendLog, appendToSection, serializeTask, setNextStep, type TaskType } from '../core/task'
+import {
+  KNOWN_SECTIONS, TASK_TYPES, appendLog, appendToSection, checkItem, sectionNames, sectionProgress, serializeTask, setNextStep, setSection,
+  uncheckedItems, type TaskType,
+} from '../core/task'
 import { OUTCOMES, advance, resolveInput, type Outcome } from '../core/workflow'
 import {
   checkArgs, effect, fail, objectSchema, ok, sessionCwd, sessionPreset, steerAgent, textBlock, type AnyCtx, type PropSpec,
@@ -132,6 +136,14 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
 
   const str: PropSpec = { type: 'string' }
 
+  /** A task with unfinished blockers must not be worked or advanced. */
+  const assertNotBlocked = async (cwd: string, name: string) => {
+    const blockers = await unresolvedBlockers(cwd, await readTask(cwd, name, rootDir), rootDir)
+    if (blockers.length) {
+      throw new Error(`Task "${name}" is blocked by ${formatBlockers(blockers)}. Work a task that is ready (odd_task_list), or remove the dependency with odd_task_unblock if it is no longer needed.`)
+    }
+  }
+
   tool('odd_init', 'Set up ODD in the current project (.odd/ config, templates, tasks). Idempotent and never overwrites. odd_task_create already does this when needed.',
     {}, [], async (_a, exec, cwd) => initReport(cwd, exec?.agent))
 
@@ -142,11 +154,14 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       return (await isInitialized(cwd, rootDir)) ? list : `${list}\n(ODD is not initialized in ${cwd}; odd_task_create sets it up.)`
     })
 
-  tool('odd_task_create', 'Create an ODD task markdown file (feature | hotfix | refactor). Sets up .odd/ first if the project has none.',
-    { name: str, type: { type: 'string', enum: TASK_TYPES }, title: str, goal: str }, ['name', 'type'],
+  tool('odd_task_create', 'Create an ODD task markdown file (feature | hotfix | refactor). Sets up .odd/ first if the project has none. Optional phase starts the task later in its workflow (earlier phases are marked skipped), e.g. phase "story" for one already-defined story. Optional parent (the plan task that produced it) and blocked_by (comma-separated ids of tasks that must be done first; they must already exist, so create blockers first).',
+    { name: str, type: { type: 'string', enum: TASK_TYPES }, title: str, goal: str, phase: str, parent: str, blocked_by: str }, ['name', 'type'],
     async (a, exec, cwd) => {
       const setup = (await isInitialized(cwd, rootDir)) ? '' : `[odd] ODD was not set up in ${cwd}; ${await initReport(cwd, exec?.agent)}\n\n`
-      const task = await createTask(cwd, { name: a.name!, type: a.type as TaskType, title: a.title, goal: a.goal }, rootDir)
+      const task = await createTask(cwd, {
+        name: a.name!, type: a.type as TaskType, title: a.title, goal: a.goal, phase: a.phase,
+        parent: a.parent || undefined, blockedBy: a.blocked_by ? a.blocked_by.split(',') : undefined,
+      }, rootDir)
       const hint = (await loadConfig(cwd, rootDir)).memory.enabled
         ? '\n\n[odd] Engram is enabled: call odd_memory_recall for related past work before planning.' : ''
       return setup + serializeTask(task) + hint
@@ -165,7 +180,10 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       let skillInfo = `skill=MISSING "${skillName}" (tell the human; do not change the task state; see /odd-skills check)`
       try { const e = resolveSkill(await registry(cwd), skillName); skillInfo = `skill=${e.key}@${e.source}` }
       catch (err) { if (!(err instanceof SkillError)) throw err }
-      return `[odd] phase=${t.frontmatter.phase} mode=${mode} ${skillInfo} -> ${hint}\n\n${serializeTask(t)}`
+      const blockers = await unresolvedBlockers(cwd, t, rootDir)
+      const blocked = blockers.length
+        ? `\n[odd] BLOCKED by ${formatBlockers(blockers)}. Do not work on this task; pick a ready one (odd_task_list), or odd_task_unblock if the dependency is no longer needed.` : ''
+      return `[odd] phase=${t.frontmatter.phase} mode=${mode} ${skillInfo} -> ${hint}${blocked}\n\n${serializeTask(t)}`
     })
 
   tool('odd_dispatch', "Run the task's CURRENT phase in a clean-context subagent (only phases with mode=subagent). Records the result in the md and advances the workflow.",
@@ -173,6 +191,7 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
     async (a, exec, cwd) => {
       // ToolRunContext extends ToolExecution: exec.agent (calling Agent) and exec.signal (required).
       if (!exec?.agent) throw new Error('odd_dispatch needs a calling agent (exec.agent was undefined)')
+      await assertNotBlocked(cwd, a.name!)
       const client = createSubagentClient(ctx, exec.agent)
       const report = await dispatchPhase({ client, exec: defaultExec, builtinDirs }, cwd, a.name!, exec.signal ?? new AbortController().signal, rootDir)
       return formatReport(report)
@@ -181,12 +200,20 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
   tool('odd_task_advance', 'Record a phase result and move the workflow forward (applies circuit breakers).',
     { name: str, outcome: { type: 'string', enum: OUTCOMES }, summary: str, question: str }, ['name', 'outcome', 'summary'],
     async (a, _e, cwd) => {
+      await assertNotBlocked(cwd, a.name!)
       const t = await mutateTask(cwd, a.name!, (task, cfg) =>
         advance(task, cfg, { outcome: a.outcome as Outcome, summary: a.summary!, question: a.question || undefined }), rootDir)
       const closed = t.frontmatter.status === 'done' || t.frontmatter.status === 'blocked'
       const hint = closed && (await loadConfig(cwd, rootDir)).memory.enabled
         ? `\n[odd] Task closed: record Decisions, Lessons${t.frontmatter.type === 'hotfix' ? ' and Root cause' : ''} in the task file, then call odd_memory_capture.` : ''
       return `status=${t.frontmatter.status} phase=${t.frontmatter.phase} review_loops=${t.frontmatter.review_loops}${hint}`
+    })
+
+  tool('odd_task_unblock', 'Remove a dependency edge from a task (the blocker was dropped, merged or is no longer needed). Logged in the task. Only do this when the human agrees.',
+    { name: str, blocker: str }, ['name', 'blocker'],
+    async (a, _e, cwd) => {
+      const t = await unblockTask(cwd, a.name!, a.blocker!, rootDir)
+      return `blocked_by: ${(t.frontmatter.blocked_by ?? []).join(', ') || 'nothing'}`
     })
 
   tool('odd_task_answer', "Record the human's answer to a needs_input question and resume the phase.",
@@ -196,15 +223,37 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       return `status=${t.frontmatter.status} phase=${t.frontmatter.phase}`
     })
 
-  tool('odd_task_note', 'Append a line to a task section (Decisions, Lessons, Root cause, Handoffs, Evidence, Log, Open questions) or set Next step.',
-    { name: str, section: str, text: str }, ['name', 'section', 'text'],
+  tool('odd_task_note', `Write to a task section. mode "append" (default) adds to the end; mode "replace" overwrites it (use it for Backlog, Story, Acceptance criteria, Implementation plan, Out of scope, Suggestions, Test list). Known sections: ${KNOWN_SECTIONS.join(', ')}. Headings inside the text are demoted so they cannot split the file.`,
+    { name: str, section: str, text: str, mode: { type: 'string', enum: ['append', 'replace'] } }, ['name', 'section', 'text'],
     async (a, _e, cwd) => {
       await mutateTask(cwd, a.name!, (task) => {
-        if (/^next step$/i.test(a.section!)) return setNextStep(task, a.text!)
-        if (/^log$/i.test(a.section!)) return appendLog(task, 'orchestrator', a.text!)
-        return { ...task, body: appendToSection(task.body, a.section!, a.text!) }
+        const wanted = a.section!.trim()
+        const canonical = [...KNOWN_SECTIONS, ...sectionNames(task.body)].find((n) => n.toLowerCase() === wanted.toLowerCase())
+        if (!canonical) throw new Error(`Unknown section "${wanted}". Use one of: ${KNOWN_SECTIONS.join(', ')}`)
+        if (canonical === 'Next step') return setNextStep(task, a.text!)
+        if (canonical === 'Log') return appendLog(task, 'orchestrator', a.text!)
+        if (a.mode === 'replace') return { ...task, body: setSection(task.body, canonical, a.text!) }
+        return { ...task, body: appendToSection(task.body, canonical, a.text!) }
       }, rootDir)
       return 'ok'
+    })
+
+  tool('odd_task_check', 'Tick an item of a checklist section (default "Test list"; also "Acceptance criteria"). item is the start of the item text, or a distinctive part of it. Returns the section progress.',
+    { name: str, item: str, section: str }, ['name', 'item'],
+    async (a, _e, cwd) => {
+      const section = a.section?.trim() || 'Test list'
+      let progress = ''
+      await mutateTask(cwd, a.name!, (task) => {
+        const body = checkItem(task.body, section, a.item!, true)
+        if (body === task.body) {
+          const open = uncheckedItems(task.body, section)
+          throw new Error(`No unchecked item in "${section}" matches "${a.item}". ` + (open.length ? `Unchecked items:\n${open.map((t) => `- ${t}`).join('\n')}` : 'Nothing is left to check.'))
+        }
+        const p = sectionProgress(body, section)
+        progress = `${section}: ${p.done}/${p.total} done`
+        return { ...task, body }
+      }, rootDir)
+      return progress
     })
 
   tool('odd_skill_list', 'List available skills (name, source, description) in ODD precedence order. Includes ODD-only project skills the native skill tool cannot see.',

@@ -3,18 +3,19 @@
 Organic-Driven Development orchestrator for DeepSeek Harness.
 **The markdown task file is the source of truth.** Agents are temporary executors.
 
-## Status: phase 4 (Engram memory) + project-scoped autonomy, targeting dsh 0.2.2-rc.5
+## Status: v0.5 (production skills, plan tasks, dependencies), targeting dsh 0.2.2-rc.5
 
 The orchestrator runs in the main agent. It reads and writes `.odd/tasks/<name>.md`
 through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases listed under
-`dispatch:` in `.odd/config.yml` (default: `code-review`) run through `odd_dispatch`.
+`dispatch:` in `.odd/config.yml` (default: `code-review` and `verify`) run through `odd_dispatch`.
 
 | Phase | Scope | State |
 |---|---|---|
 | 1 | templates, config, md format, state machine, commands, tools | done |
 | 2 | subagent dispatch for `code-review` via `ctx.subagents` (spawn + outputSchema + toolFilter) | done |
-| 3 | skill registry (ODD project > project > user > built-in), validation, duplicate detection | this version |
-| 4 | Engram memory: recall before a task, capture when it closes; md wins on conflict | this version |
+| 3 | skill registry (ODD project > project > user > built-in), validation, duplicate detection | done |
+| 4 | Engram memory: recall before a task, capture when it closes; md wins on conflict | done |
+| 4.5 | production phase skills, `plan` tasks, task dependencies, `verify` | this version |
 | 5 | auto gates, git worktrees, parallelism | todo |
 
 ## Where state lives, and how the orchestrator sets itself up
@@ -52,6 +53,65 @@ ran in sequence, and the project was resolved from the session's cwd.
 - **It is a frozen copy of `standard`.** When DSH upgrades, `standard` may gain rows the copy lacks; diff or regenerate.
 - The preset needs `dsh-plugin-odd` installed as well: the `odd_*` tools and commands come from the plugin.
 
+## Workflows and skills (v0.5)
+
+An idea becomes tickets; each ticket is its own task and goes through its own delivery workflow.
+
+```
+plan      grill -> backlog -> to-tickets          (creates one feature task per ticket, with blockers)
+feature   story -> pair -> code-review -> verify -> ship
+hotfix    fix  -> code-review -> verify -> ship
+refactor  refactor -> code-review -> ship
+```
+
+| Skill | Runs | What it does |
+|---|---|---|
+| `grill` | inline | interviews you in rounds over a design tree until the frontier is empty; records decisions as it goes |
+| `backlog` | inline | slices the idea into ordered one-line vertical stories (stack and expensive decisions first) |
+| `to-tickets` | inline | tracer-bullet tickets with blocking edges; creates them as tasks in dependency order; expand-contract for wide refactors |
+| `story` | inline | one story: 2-3 Given/When/Then criteria, mini plan, out of scope (writes `Story`, `Acceptance criteria`, ...) |
+| `pair` | inline | driver/navigator TDD, one test at a time; also fixes review and verification findings |
+| `fix` | inline | reproduce with a failing test, confirm the cause, minimum fix, regression guard |
+| `refactor` | inline | characterization tests first, small behavior-preserving steps, suite equal to baseline |
+| `code-review` | subagent, read-only | judges the diff against criteria and out-of-scope; `testing` is embedded in its packet |
+| `verify` | subagent, may run commands | runs the software and collects evidence per criterion; never edits |
+| `ship` | inline | readiness from the task file, commit and PR proposals; never commits, pushes or opens the PR |
+| `tdd`, `testing` | loaded by other skills | the shared TDD discipline and the test-quality standards |
+| `odd-orchestrator` | loaded by the agent | the protocol: routing, phases, sections, dependencies |
+
+How the pieces connect:
+
+- **The task file replaces the pasted block.** `story` writes `Story`, `Acceptance criteria`, `Implementation plan`,
+  `Out of scope`; `pair`, `code-review`, `verify` and `ship` read those sections. The `Reads:` / `Writes:` line at the top
+  of each skill is checked by the test suite so the contract between skills cannot drift.
+- **Routing.** A vague idea starts a `plan` task; one concrete story starts a `feature` task at `story`; a bug starts a
+  `hotfix`; a structure-only change starts a `refactor`. `odd_task_create` accepts `phase` to start later (earlier
+  phases are marked skipped), `parent` and `blocked_by`.
+- **Dependencies are enforced.** A task with unfinished `blocked_by` cannot be advanced or dispatched, `odd_task_read`
+  says why, and `odd_task_list` ends with "Ready to work" (the frontier). A finished or archived blocker releases its
+  dependents. `odd_task_unblock` removes an edge (logged).
+- **Review and verification loop back.** `changes_requested` from `code-review` or `verify` returns the task to
+  `pair` / `fix` / `refactor` and counts toward `max_review_loops`. `verify` maps to the contract: all pass = approve, any
+  fail = changes_requested, unknowns = needs_input (a human checks), cannot run = blocked.
+- **Answers reach the subagent.** `odd_task_answer` records the answer under `Answers` (and closes the question), and
+  every dispatched packet includes it.
+- **Full reports are kept.** A review's or verification's write-up lands in `Reviews` / `Verification` with the loop
+  number; the compact findings go to `Evidence` where the next `pair` run reads them.
+- **The task file cannot be corrupted by its own content.** `#` / `##` headings written through the tools are demoted,
+  fences are respected and unclosed ones closed, and `odd_task_note` rejects unknown section names.
+
+Differences from your original skills, on purpose: no `allowed-tools` / `disable-model-invocation` / `argument-hint`
+(Claude Code keys DSH does not use); `CLAUDE.md` and `AGENTS.md` are both read; the "run `/code-review` and `/verify`"
+hand-offs are the orchestrator's job; `grill` keeps its own round-based style while the other skills ask one question at
+a time.
+
+Upgrading a project initialized by an older version: your `.odd/config.yml` keeps its old `workflows`, so you will not
+get `plan`'s phases, `verify` or the `dispatch.verify` role until you merge them (delete the `workflows:` and `dispatch:`
+blocks to take the new defaults, or copy them from a fresh `/odd-init`), and `.odd/templates/*.md` are never overwritten
+(sections are created on demand either way).
+
+Acceptance scenarios to run by hand against a real session: `evals/scenarios.md`.
+
 ## Layout it creates (`/odd-init`)
 
 ```
@@ -67,8 +127,8 @@ ran in sequence, and the project was resolved from the session's cwd.
 
 Commands: `/odd-init`, `/odd-status`, `/odd-resume <task>`, `/odd-skills [check]`, `/odd-memory`.
 Tools: `odd_task_create`, `odd_task_read`, `odd_task_advance`, `odd_task_answer`,
-`odd_task_note`, `odd_task_archive`, `odd_dispatch`, `odd_skill_list`, `odd_skill_load`,
-`odd_memory_recall`, `odd_memory_capture`, `odd_init`, `odd_task_list`.
+`odd_task_note` (append or replace), `odd_task_check`, `odd_task_unblock`, `odd_task_archive`, `odd_dispatch`,
+`odd_skill_list`, `odd_skill_load`, `odd_memory_recall`, `odd_memory_capture`, `odd_init`, `odd_task_list`.
 
 `/odd-resume <task>` now steers the agent into resuming (read `odd-orchestrator`, then the task file).
 
@@ -122,13 +182,12 @@ Default precedence, first match wins (`skills_paths` in `config.yml`):
 `{project}` is the nearest `.git` ancestor (cwd if none), like DSH. `~` and plain relative paths still work.
 
 - **Builtin phase skills.** The plugin ships a default skill for every phase of the default workflows (`grill`,
-  `story`, `pair`, `fix`, `refactor`, `code-review`, `ship`) plus `odd-orchestrator`, so a fresh project works with
-  no skills of your own. They sit at the lowest precedence: put a skill with the same name in `.odd/skills/`,
+  `backlog`, `to-tickets`, `story`, `pair`, `fix`, `refactor`, `code-review`, `verify`, `ship`), the shared `tdd` and
+  `testing`, and `odd-orchestrator`, so a fresh project works with no skills of your own. They sit at the lowest precedence: put a skill with the same name in `.odd/skills/`,
   `{project}/.agents/skills/` or `~/.agents/skills/` and yours wins. `/odd-skills check` shows which one is used.
 - **Your own skills under other names.** If your skills are called differently (say `grill-me`), map them instead of
   renaming: `phase_skills: { grill: grill-me }` in `.odd/config.yml`. Dispatch, `odd_task_read` and
-  `/odd-skills check` all follow the mapping. To add a phase (for example `backlog` before `grill`), edit
-  `workflows.feature` and provide a skill with that name.
+  `/odd-skills check` all follow the mapping. To add a phase, edit the `workflows` entry and provide a skill with that name.
 - **A missing skill never changes a task.** `odd_task_read` flags `skill=MISSING "<name>"` and the protocol tells the
   agent to explain what is missing and stop. It must not call `odd_task_advance` (a tooling gap is not a phase result).
 - **Descriptions must be valid YAML.** An unquoted `: ` inside `description:` makes the frontmatter unparseable;

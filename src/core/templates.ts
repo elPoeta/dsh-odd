@@ -7,25 +7,16 @@ export interface TemplateVars {
   goal: string
   branch: string
   created: string
+  /** Phase to start at. Earlier phases are marked skipped. Defaults to the first phase. */
+  start_phase?: string
 }
 
-const tail = (extra = '') => `## Next step
-{{next_step}}
-
-## Decisions
-${extra}
-## Lessons
-
-## Handoffs
-
-## Log
-- {{created}} [orchestrator] task created
-
-## Open questions
-
-## Evidence`
-
-const HEAD = `---
+/**
+ * Sections skills write on demand (Backlog, Implementation plan, Out of scope, Suggestions, Answers,
+ * Reviews, Verification, Delivery, Memory) are created when first used; the ones below are always present
+ * so the file reads in a stable order.
+ */
+const head = (goalHint = '') => `---
 id: {{id}}
 type: {{type}}
 status: todo
@@ -39,18 +30,58 @@ updated: {{created}}
 # {{title}}
 
 ## Goal
-{{goal}}
+${goalHint}{{goal}}
 
 ## Plan
 {{plan_checklist}}
 
+## Next step
+{{next_step}}
+
 `
 
+const tail = (rootCause = '') => `## Story
+
+## Acceptance criteria
+
+${rootCause}## Test list
+
+## Decisions
+
+## Lessons
+
+## Handoffs
+
+## Log
+- {{created}} [orchestrator] task created
+
+## Open questions
+
+## Evidence`
+
 /** Default templates, one per task type. Override with .odd/templates/<type>.md */
+const planTail = `## Backlog
+
+## Tickets
+
+## Decisions
+
+## Lessons
+
+## Handoffs
+
+## Log
+- {{created}} [orchestrator] task created
+
+## Open questions
+
+## Evidence`
+
 export const DEFAULT_TEMPLATES: Record<TaskType, string> = {
-  feature: HEAD + tail(),
-  hotfix: HEAD.replace('## Goal', '## Goal\n<!-- hotfix: describe the symptom; record the cause under Root cause -->') + tail('\n## Root cause\n'),
-  refactor: HEAD.replace('## Goal', '## Goal\n<!-- refactor: behavior must not change; list the safety net (tests) -->') + tail(),
+  plan: head('<!-- plan: the idea. Grill it, slice it into a backlog, then turn it into tickets (one task each) -->\n') + planTail,
+  feature: head() + tail(),
+  hotfix: head('<!-- hotfix: describe the symptom; the cause goes under Root cause -->\n') + tail('## Root cause\n\n'),
+  refactor: head('<!-- refactor: behavior must not change; the safety net goes under Test list -->\n') + tail(),
 }
 
 export function render(template: string, vars: Record<string, string>): string {
@@ -62,12 +93,16 @@ export function render(template: string, vars: Record<string, string>): string {
 
 export function renderTask(type: TaskType, cfg: OddConfig, vars: TemplateVars, template?: string): Task {
   const phases = cfg.workflows[type]
+  const start = vars.start_phase ?? phases[0]!
+  const startIdx = phases.indexOf(start)
+  if (startIdx === -1) throw new Error(`"${start}" is not a phase of the ${type} workflow (phases: ${phases.join(', ')})`)
+  const { start_phase: _ignored, ...rest } = vars
   const text = render(template ?? DEFAULT_TEMPLATES[type], {
-    ...vars,
+    ...rest,
     type,
-    first_phase: phases[0]!,
-    plan_checklist: phases.map((p) => `- [ ] ${p}`).join('\n'),
-    next_step: `Run phase "${phases[0]}". Goal: ${vars.goal || vars.title}`,
+    first_phase: start,
+    plan_checklist: phases.map((p, i) => (i < startIdx ? `- [x] ${p} (skipped)` : `- [ ] ${p}`)).join('\n'),
+    next_step: `Run phase "${start}". Goal: ${vars.goal || vars.title}`,
   })
   // Round-trip validates the template and normalizes formatting.
   return parseTask(serializeTask(parseTask(text)))

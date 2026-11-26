@@ -168,7 +168,7 @@ describe('check (doctor)', () => {
   })
 
   it('is clean when every phase has a valid skill', async () => {
-    for (const p of ['grill', 'story', 'pair', 'code-review', 'ship', 'fix', 'refactor']) await put(proj, `.odd/skills/${p}/SKILL.md`, skill(p))
+    for (const p of ['grill', 'backlog', 'to-tickets', 'story', 'pair', 'code-review', 'verify', 'ship', 'fix', 'refactor', 'testing']) await put(proj, `.odd/skills/${p}/SKILL.md`, skill(p))
     const r = checkRegistry(await scan(), DEFAULT_CONFIG)
     expect(r).toMatchObject({ errors: 0, warnings: 0 })
     expect(formatCheck(r)).toContain('OK')
@@ -198,7 +198,7 @@ describe('builtin phase skills (defaults that your own skills override)', () => 
     const reg = await scan(DEFAULT_CONFIG, { builtinDirs: [builtin] })
     const r = checkRegistry(reg, DEFAULT_CONFIG)
     expect(r.issues).toEqual([])
-    for (const phase of ['grill', 'story', 'pair', 'fix', 'refactor', 'code-review', 'ship']) {
+    for (const phase of ['grill', 'backlog', 'to-tickets', 'story', 'pair', 'fix', 'refactor', 'code-review', 'verify', 'ship', 'tdd', 'testing']) {
       expect(resolveSkill(reg, phase), phase).toMatchObject({ valid: true, source: 'builtin' })
     }
   })
@@ -213,14 +213,14 @@ describe('builtin phase skills (defaults that your own skills override)', () => 
 
   it('encode the rules that matter: evidence, no commit, read-only review contract', async () => {
     const text = async (n: string) => (await loadResolvedSkill(proj, DEFAULT_CONFIG, n, { env, home, builtinDirs: [builtin] })).text
-    expect(await text('pair')).toMatch(/Never write "tests pass" without running them/)
-    expect(await text('ship')).toMatch(/Do NOT commit, push, merge/)
+    expect(await text('tdd')).toMatch(/Never write "tests pass" without having run them/)
+    expect(await text('ship')).toMatch(/Never commit, push, merge/)
     const review = await text('code-review')
     expect(review).toMatch(/verdict/)
     expect(review).toMatch(/\[blocker\|major\|minor\|nit\]/)
-    expect(review).toMatch(/cannot modify files/)
+    expect(review).toMatch(/Report, do not edit/)
     expect(await text('fix')).toMatch(/Root cause/)
-    expect(await text('grill')).toMatch(/do not use `needs_input`/)
+    expect(await text('grill')).toMatch(/never with `needs_input`/)
   })
 })
 

@@ -35,7 +35,7 @@ describe('dispatch config', () => {
     expect(effectiveDeny(cfg.dispatch['code-review']!)).toEqual(expect.arrayContaining(READONLY_DENY))
   })
   it('can disable a role with null and adds extra denies', () => {
-    expect(mergeConfig({ dispatch: { 'code-review': null } }).dispatch).toEqual({})
+    expect(Object.keys(mergeConfig({ dispatch: { 'code-review': null } }).dispatch)).toEqual(['verify'])
     const cfg = mergeConfig({ dispatch: { 'code-review': { tool_deny: ['web_fetch'] } } })
     expect(effectiveDeny(cfg.dispatch['code-review']!)).toContain('web_fetch')
   })

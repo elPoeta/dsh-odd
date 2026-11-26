@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-odd",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Organic-Driven Development orchestrator for DeepSeek Harness: markdown-as-source-of-truth task tracking, workflows and circuit breakers.",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,6 +13,7 @@
     "dist",
     "skills",
     "examples",
+    "evals",
     "cordis.patch.yml",
     "README.md"
   ],
