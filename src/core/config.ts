@@ -40,6 +40,11 @@ export interface MemoryConfig {
 export interface BootstrapConfig {
   /** Keep a managed ODD block in the project's AGENTS.md so every session acts as the orchestrator. */
   agents_md: boolean
+  /**
+   * Sessions running one of these agent presets already carry the ODD protocol in their
+   * prompt, so the AGENTS.md block is not added for them (keeps your repos untouched).
+   */
+  skip_presets: string[]
 }
 
 export interface OddConfig {
@@ -55,6 +60,8 @@ export interface OddConfig {
   skills_paths: string[]
   /** Phases that run in a subagent. Phases not listed run inline in the main agent. */
   dispatch: Record<string, RoleConfig>
+  /** Map a phase to a skill with a different name (use your own skills without renaming them). */
+  phase_skills: Record<string, string>
   /** Command whose stdout is the change set handed to reviewers. */
   diff_command: string
   memory: MemoryConfig
@@ -107,9 +114,10 @@ export const DEFAULT_CONFIG: OddConfig = {
   dispatch: {
     'code-review': { ...ROLE_DEFAULTS, include_diff: true },
   },
+  phase_skills: {},
   diff_command: 'git diff HEAD',
   memory: { enabled: false, server_name: 'engram', scope: 'project', max_item_chars: 1500, recall_limit: 5 },
-  bootstrap: { agents_md: true },
+  bootstrap: { agents_md: true, skip_presets: ['odd'] },
 }
 
 export const DEFAULT_CONFIG_YAML = `# ODD configuration. Markdown task files are the source of truth.
@@ -132,6 +140,8 @@ skills_paths:           # precedence: first match wins (ODD project > project > 
   - "{project}/.agents/skills"
   - "{dsh_home}/skills"          # $DSH_HOME or ~/.dsh
   - "{agents_home}/skills"       # $DSH_AGENTS_HOME or ~/.agents
+# phase_skills:         # use your own skills under other names: phase -> skill name
+#   grill: grill-me
 diff_command: git diff HEAD   # change set embedded in the reviewer's handoff packet
 dispatch:               # phases run in a clean-context subagent; others run inline
   code-review:
@@ -145,6 +155,7 @@ dispatch:               # phases run in a clean-context subagent; others run inl
   # to disable: set a phase to null, e.g.  code-review: null
 bootstrap:
   agents_md: true       # managed ODD block in AGENTS.md: sessions in this project act as the orchestrator
+  skip_presets: [odd]   # not added when the session runs these agent presets (their prompt already has it)
 memory:                 # Engram integration (opt-in). The task md stays the source of truth.
   enabled: false
   server_name: engram   # must match serverName of the @deepseek-ai/dsh-mcp-client row
@@ -175,6 +186,7 @@ export function mergeConfig(user: RawConfig | null | undefined): OddConfig {
     workflows: { ...DEFAULT_CONFIG.workflows, ...(u.workflows ?? {}) },
     review_loopback: { ...DEFAULT_CONFIG.review_loopback, ...(u.review_loopback ?? {}) },
     dispatch,
+    phase_skills: { ...DEFAULT_CONFIG.phase_skills, ...(u.phase_skills ?? {}) },
     memory: { ...DEFAULT_CONFIG.memory, ...(u.memory ?? {}) },
     bootstrap: { ...DEFAULT_CONFIG.bootstrap, ...(u.bootstrap ?? {}) },
   }
@@ -207,12 +219,24 @@ export function validateConfig(cfg: OddConfig): void {
     if (!Number.isInteger(role.max_depth) || role.max_depth < 0) throw new Error(`dispatch."${phase}".max_depth must be a non-negative integer`)
     if (role.memory !== 'none' && role.memory !== 'read') throw new Error(`dispatch."${phase}".memory must be "none" or "read"`)
   }
+  for (const [phase, skill] of Object.entries(cfg.phase_skills)) {
+    if (!allPhases.has(phase)) throw new Error(`phase_skills."${phase}" is not a phase of any workflow`)
+    if (typeof skill !== 'string' || !/^[a-z0-9][a-z0-9-]*$/.test(skill)) throw new Error(`phase_skills."${phase}" must be a skill name (lowercase letters, digits, hyphens)`)
+  }
   if (typeof cfg.bootstrap.agents_md !== 'boolean') throw new Error('bootstrap.agents_md must be true or false')
+  if (!Array.isArray(cfg.bootstrap.skip_presets) || cfg.bootstrap.skip_presets.some((p) => typeof p !== 'string')) {
+    throw new Error('bootstrap.skip_presets must be a list of preset ids')
+  }
   const m = cfg.memory
   if (!/^[A-Za-z0-9_-]{1,32}$/.test(m.server_name)) throw new Error('memory.server_name must match [A-Za-z0-9_-]{1,32}')
   if (m.scope !== 'project' && m.scope !== 'personal') throw new Error('memory.scope must be "project" or "personal"')
   if (!Number.isInteger(m.max_item_chars) || m.max_item_chars < 200) throw new Error('memory.max_item_chars must be an integer >= 200')
   if (!Number.isInteger(m.recall_limit) || m.recall_limit < 1 || m.recall_limit > 20) throw new Error('memory.recall_limit must be 1-20')
+}
+
+/** Name of the skill that runs a phase: the mapped one, else the phase name itself. */
+export function skillFor(cfg: OddConfig, phase: string): string {
+  return cfg.phase_skills[phase] ?? phase
 }
 
 /** Tools to hide from the child of this role (before intersecting with registered tools). */

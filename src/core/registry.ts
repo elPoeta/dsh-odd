@@ -2,7 +2,7 @@ import { readFile, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { parse } from 'yaml'
-import { SKILL_PATH_TOKENS, type OddConfig } from './config'
+import { SKILL_PATH_TOKENS, skillFor, type OddConfig } from './config'
 import { NAME_RE } from './task'
 
 /**
@@ -206,11 +206,12 @@ export function checkRegistry(reg: Registry, cfg: OddConfig): CheckReport {
   const phases = [...new Set(Object.values(cfg.workflows).flat())]
   for (const phase of phases) {
     const dispatched = Boolean(cfg.dispatch[phase])
-    const first = reg.byName.get(phase)?.[0]
+    const skillName = skillFor(cfg, phase)
+    const first = reg.byName.get(skillName)?.[0]
     if (!first) {
       issues.push({
         severity: dispatched ? 'error' : 'warning', code: 'missing-skill',
-        message: `Phase "${phase}" has no skill${dispatched ? ' (it is dispatched to a subagent, which needs the skill text)' : ' (the agent would run it without instructions)'}`,
+        message: `Phase "${phase}" has no skill${skillName !== phase ? ` "${skillName}"` : ''}${dispatched ? ' (it is dispatched to a subagent, which needs the skill text)' : ' (the agent would run it without instructions)'}`,
       })
     } else if (!first.valid) {
       issues.push({ severity: 'error', code: 'phase-skill-invalid', message: `Phase "${phase}" resolves to an invalid skill`, path: first.path })

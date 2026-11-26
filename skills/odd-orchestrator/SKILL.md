@@ -5,6 +5,8 @@ description: Use when starting, resuming or advancing an ODD task (feature, hotf
 
 # ODD orchestrator protocol (the orchestrator runs in the main agent)
 
+Talk to the human in their own language.
+
 The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on chat history.
 
 ## Resume or start
@@ -18,17 +20,19 @@ The task file `.odd/tasks/<name>.md` is the only source of truth. Never rely on 
 0. `odd_task_read` starts with `[odd] phase=<p> mode=<inline|subagent>`.
    - `mode=subagent`: call `odd_dispatch` with the task name. Do NOT run the phase yourself. It builds a minimal handoff packet, runs the phase in a clean-context subagent, records the result in the md and advances the workflow. Read its answer: if the status is `needs_input`, ask the human the question, then `odd_task_answer`, then `odd_dispatch` again; if `blocked`, stop and report.
    - `mode=inline`: continue with step 1 below.
-   - The header also shows `skill=<name>@<source>`. If it says `MISSING`, tell the human to run `/odd-skills check` instead of improvising.
-1. The current phase is in the frontmatter (`phase`). Load its instructions with `odd_skill_load` (name = the phase: grill, story, pair, fix, refactor, ship) and follow them. Use `odd_skill_load`, not the native skill tool: it applies ODD precedence (project skills override global ones) and can see `.odd/skills`.
+   - The header also shows `skill=<name>@<source>`. If it says `MISSING`, do not improvise and do NOT call `odd_task_advance`: a gap in the tooling is not a result of the phase and must not change the task state. Tell the human which skill is missing and where it can live (`.odd/skills/<name>/SKILL.md`, `~/.agents/skills/`, or map your own skill with `phase_skills` in `.odd/config.yml`), then stop.
+1. The current phase is in the frontmatter (`phase`). Load its instructions with `odd_skill_load` (use the exact name from the header) and follow them. Use `odd_skill_load`, not the native skill tool: it applies ODD precedence (project skills override global ones) and can see `.odd/skills`.
 2. Keep the result short. Record decisions with `odd_task_note` (section `Decisions`), proof with section `Evidence` (exact test command and result), and what you handed to the phase with section `Handoffs`.
 3. Never claim tests pass without running them yourself and recording the output in Evidence.
-4. Close the phase with `odd_task_advance`:
+4. Interactive phases (grill, story, pair): ask the human directly in the conversation and wait for the answer. Use `needs_input` only when you must stop now and the answer will come in a later session.
+5. Close the phase with `odd_task_advance`:
    - `done`: phase finished, move on.
    - `changes_requested`: only from code-review; returns to the implementation phase.
-   - `needs_input`: you need a human answer; include `question`. Then stop and ask the human.
+   - `needs_input`: you need a human answer in a later session; include `question`. Then stop.
    - `failed`: the phase did not succeed; it will retry up to the configured limit.
    - `blocked`: you cannot continue; explain why.
-5. After the human answers a question, call `odd_task_answer`, then re-run the same phase.
+6. After the human answers a pending question, call `odd_task_answer`, then re-run the same phase.
+7. If the human interrupts or says stop, stop. Do not call `odd_task_advance` with an invented outcome: the task file already says where to resume.
 
 ## Rules
 - If status is `blocked`, stop and tell the human why. Do not work around the circuit breaker.

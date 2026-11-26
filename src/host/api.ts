@@ -69,6 +69,15 @@ export async function steerAgent(agent: AnyCtx, text: string): Promise<void> {
  * Working directory of the session that owns an agent: agent.session.header.cwd
  * (documented in the harness note on session identity). Undefined when not available.
  */
+/**
+ * Id of the agent preset the session was created with: SessionHeader.agentPreset
+ * (the field DSH writes on the session's first line). Undefined when not available.
+ */
+export function sessionPreset(agent: unknown): string | undefined {
+  const id = (agent as any)?.session?.header?.agentPreset
+  return typeof id === 'string' && id ? id : undefined
+}
+
 export function sessionCwd(agent: unknown): string | undefined {
   const cwd = (agent as any)?.session?.header?.cwd
   return typeof cwd === 'string' && cwd ? cwd : undefined

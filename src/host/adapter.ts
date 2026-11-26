@@ -18,6 +18,7 @@ import {
   assertCapturable, formatCapture, formatMemoryStatus, formatRecall, missingMemoryTools,
   planCapture, planRecall, recordCapture, type CapturePlan,
 } from '../core/memory'
+import { skillFor } from '../core/config'
 import { resolveProject } from '../core/project'
 import {
   SkillError, checkRegistry, formatCheck, formatSkillList, readSkillBody, resolveSkill, scanRegistry,
@@ -28,7 +29,7 @@ import {
 import { TASK_TYPES, appendLog, appendToSection, serializeTask, setNextStep, type TaskType } from '../core/task'
 import { OUTCOMES, advance, resolveInput, type Outcome } from '../core/workflow'
 import {
-  checkArgs, effect, fail, objectSchema, ok, sessionCwd, steerAgent, textBlock, type AnyCtx, type PropSpec,
+  checkArgs, effect, fail, objectSchema, ok, sessionCwd, sessionPreset, steerAgent, textBlock, type AnyCtx, type PropSpec,
 } from './api'
 import { createSubagentClient, registeredToolNames } from './subagent-client'
 
@@ -51,11 +52,15 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
   const registry = async (cwd: string) =>
     scanRegistry(cwd, await loadConfig(cwd, rootDir, true), { builtinDirs, home: opts.home })
 
-  const initReport = async (cwd: string) => {
-    const created = await initOdd(cwd, rootDir)
-    return created.length
+  const initReport = async (cwd: string, agent?: unknown) => {
+    const cfg = await loadConfig(cwd, rootDir, true)
+    const preset = sessionPreset(agent)
+    const skip = cfg.bootstrap.agents_md && preset !== undefined && cfg.bootstrap.skip_presets.includes(preset)
+    const created = await initOdd(cwd, rootDir, { skipAgentsMd: skip })
+    const note = skip ? `\n(AGENTS.md block not added: this session runs the "${preset}" preset, which already carries the ODD protocol.)` : ''
+    return (created.length
       ? `Initialized ODD in ${cwd}:\n${created.map((c) => `- ${c}`).join('\n')}`
-      : `ODD already initialized in ${cwd}.`
+      : `ODD already initialized in ${cwd}.`) + note
   }
 
   // ---- human slash commands (never reach the model) -----------------------
@@ -75,7 +80,7 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       },
     }), `odd: /${name}`)
 
-  command('odd-init', 'Create the .odd/ structure in this project (the agent also does this on its own)', undefined, (_i, cwd) => initReport(cwd))
+  command('odd-init', 'Create the .odd/ structure in this project (the agent also does this on its own)', undefined, ({ agent }, cwd) => initReport(cwd, agent))
 
   command('odd-status', 'List active ODD tasks with phase, progress and next step', undefined,
     async (_i, cwd) => formatStatus(await listTasks(cwd, rootDir)))
@@ -128,7 +133,7 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
   const str: PropSpec = { type: 'string' }
 
   tool('odd_init', 'Set up ODD in the current project (.odd/ config, templates, tasks). Idempotent and never overwrites. odd_task_create already does this when needed.',
-    {}, [], async (_a, _e, cwd) => initReport(cwd))
+    {}, [], async (_a, exec, cwd) => initReport(cwd, exec?.agent))
 
   tool('odd_task_list', 'List the ODD tasks of this project with status, phase, progress and next step. Call it first to decide whether to resume a task or create one.',
     {}, [],
@@ -139,8 +144,8 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
 
   tool('odd_task_create', 'Create an ODD task markdown file (feature | hotfix | refactor). Sets up .odd/ first if the project has none.',
     { name: str, type: { type: 'string', enum: TASK_TYPES }, title: str, goal: str }, ['name', 'type'],
-    async (a, _e, cwd) => {
-      const setup = (await isInitialized(cwd, rootDir)) ? '' : `[odd] ODD was not set up in ${cwd}; ${await initReport(cwd)}\n\n`
+    async (a, exec, cwd) => {
+      const setup = (await isInitialized(cwd, rootDir)) ? '' : `[odd] ODD was not set up in ${cwd}; ${await initReport(cwd, exec?.agent)}\n\n`
       const task = await createTask(cwd, { name: a.name!, type: a.type as TaskType, title: a.title, goal: a.goal }, rootDir)
       const hint = (await loadConfig(cwd, rootDir)).memory.enabled
         ? '\n\n[odd] Engram is enabled: call odd_memory_recall for related past work before planning.' : ''
@@ -153,11 +158,12 @@ export function registerAll(ctx: AnyCtx, opts: AdapterOptions): void {
       const t = await readTask(cwd, a.name!, rootDir)
       const cfg = await loadConfig(cwd, rootDir)
       const mode = phaseMode(cfg, t.frontmatter.phase)
+      const skillName = skillFor(cfg, t.frontmatter.phase)
       const hint = mode === 'subagent'
         ? 'call odd_dispatch to run it in a clean-context subagent'
-        : `run it inline: call odd_skill_load with "${t.frontmatter.phase}" and follow it`
-      let skillInfo = 'skill=MISSING (run /odd-skills check)'
-      try { const e = resolveSkill(await registry(cwd), t.frontmatter.phase); skillInfo = `skill=${e.key}@${e.source}` }
+        : `run it inline: call odd_skill_load with "${skillName}" and follow it`
+      let skillInfo = `skill=MISSING "${skillName}" (tell the human; do not change the task state; see /odd-skills check)`
+      try { const e = resolveSkill(await registry(cwd), skillName); skillInfo = `skill=${e.key}@${e.source}` }
       catch (err) { if (!(err instanceof SkillError)) throw err }
       return `[odd] phase=${t.frontmatter.phase} mode=${mode} ${skillInfo} -> ${hint}\n\n${serializeTask(t)}`
     })

@@ -34,7 +34,7 @@ export async function isInitialized(cwd: string, rootDir?: string): Promise<bool
 }
 
 /** Idempotent. Never overwrites existing files. Returns what it created or changed. */
-export async function initOdd(cwd: string, rootDir?: string): Promise<string[]> {
+export async function initOdd(cwd: string, rootDir?: string, opts: { skipAgentsMd?: boolean } = {}): Promise<string[]> {
   const p = paths(cwd, rootDir)
   const created: string[] = []
   for (const dir of [p.root, p.templates, p.tasks, p.archive, p.skills]) {
@@ -50,7 +50,7 @@ export async function initOdd(cwd: string, rootDir?: string): Promise<string[]> 
   }
   // Managed AGENTS.md block: DSH injects it into every session in this project.
   const cfg = parseConfig(await readFile(p.config, 'utf8'))
-  if (cfg.bootstrap.agents_md) {
+  if (cfg.bootstrap.agents_md && !opts.skipAgentsMd) {
     const result = await applyAgentsMd(cwd, rootDir ?? '.odd')
     if (result !== 'unchanged') created.push(`${join(cwd, 'AGENTS.md')} (managed ODD block ${result})`)
   }

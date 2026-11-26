@@ -1,6 +1,6 @@
 {
   "name": "dsh-plugin-odd",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "description": "Organic-Driven Development orchestrator for DeepSeek Harness: markdown-as-source-of-truth task tracking, workflows and circuit breakers.",
   "type": "module",
   "main": "./dist/index.js",

@@ -189,6 +189,10 @@ describe('config and subagent isolation from memory', () => {
     expect(() => mergeConfig({ memory: { recall_limit: 50 } as never })).toThrow(/recall_limit/)
     expect(() => mergeConfig({ dispatch: { 'code-review': { memory: 'write' as never } } })).toThrow(/memory must be/)
   })
+  it('bootstrap defaults skip the odd preset and validate the list', () => {
+    expect(mergeConfig({}).bootstrap).toEqual({ agents_md: true, skip_presets: ['odd'] })
+    expect(() => mergeConfig({ bootstrap: { skip_presets: 'odd' } as never })).toThrow(/skip_presets/)
+  })
   it('children get NO Engram tools by default, and never the writers even with read access', () => {
     const none = effectiveDeny(ROLE_DEFAULTS)
     expect(none).toEqual(expect.arrayContaining(['mcp__engram__mem_save', 'mcp__engram__mem_search', 'mcp__engram__mem_get_observation']))

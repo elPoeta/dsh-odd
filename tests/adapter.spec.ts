@@ -384,3 +384,97 @@ describe('autonomy: the orchestrator sets itself up', () => {
   })
 })
 
+describe('ODD preset: no AGENTS.md block when the prompt already carries the protocol', () => {
+  let home: string, proj: string
+  const exec = (preset?: string) => ({
+    agent: { session: { header: { cwd: proj, ...(preset ? { agentPreset: preset } : {}) } } },
+    signal: new AbortController().signal,
+  })
+  const has = (p: string) => import('node:fs/promises').then((m) => m.stat(p)).then(() => true, () => false)
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'odd-pr-'))
+    proj = join(home, 'proj')
+    await mkdir(join(proj, '.git'), { recursive: true })
+  })
+  afterEach(() => rm(home, { recursive: true, force: true }))
+
+  it('session on the "odd" preset: .odd is created, AGENTS.md is NOT touched, and the result says why', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    const out = await f.call('odd_task_create', { name: 'arkanoid-game', type: 'feature', goal: 'a game' }, exec('odd'))
+    expect(out).toContain('ODD was not set up')
+    expect(out).toContain('AGENTS.md block not added: this session runs the "odd" preset')
+    expect(await has(join(proj, '.odd', 'tasks', 'arkanoid-game.md'))).toBe(true)
+    expect(await has(join(proj, 'AGENTS.md'))).toBe(false)
+  })
+
+  it('/odd-init and odd_init follow the same rule', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    expect((await f.run('odd-init', '', exec('odd').agent)).text).toContain('not added')
+    expect(await has(join(proj, 'AGENTS.md'))).toBe(false)
+  })
+
+  it.each([['standard'], ['cordis'], [undefined]])('other presets (%s) still get the managed block', async (preset) => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await f.call('odd_init', {}, exec(preset))
+    expect(await has(join(proj, 'AGENTS.md'))).toBe(true)
+  })
+
+  it('skip_presets is configurable (empty list: even the odd preset gets the block)', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await mkdir(join(proj, '.odd'), { recursive: true })
+    await writeFile(join(proj, '.odd', 'config.yml'), 'version: 1\nbootstrap:\n  skip_presets: []\n')
+    await f.call('odd_init', {}, exec('odd'))
+    expect(await has(join(proj, 'AGENTS.md'))).toBe(true)
+  })
+})
+
+describe('missing skills do not corrupt the task (regression from a real session)', () => {
+  let home: string, proj: string
+  const exec = () => ({ agent: { session: { header: { cwd: proj, agentPreset: 'odd' } } }, signal: new AbortController().signal })
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'odd-ms-'))
+    proj = join(home, 'proj')
+    await mkdir(join(proj, '.git'), { recursive: true })
+  })
+  afterEach(() => rm(home, { recursive: true, force: true }))
+
+  it('the header tells the agent what to do, and reading never changes the state', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await f.call('odd_task_create', { name: 'game', type: 'feature', goal: 'a game' }, exec())
+    const header = (await f.call('odd_task_read', { name: 'game' }, exec())).split('\n')[0]!
+    expect(header).toContain('skill=MISSING "grill"')
+    expect(header).toContain('do not change the task state')
+    const after = await f.call('odd_task_list', {}, exec())
+    expect(after).toContain('game [feature] todo / grill')            // still todo: nothing advanced it
+  })
+
+  it('with the builtin skills installed the same task just works', async () => {
+    const builtin = join(__dirname, '..', 'skills')
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home, builtinDirs: [builtin] })
+    await f.call('odd_task_create', { name: 'game', type: 'feature', goal: 'a game' }, exec())
+    const header = (await f.call('odd_task_read', { name: 'game' }, exec())).split('\n')[0]!
+    expect(header).toContain('skill=grill@builtin')
+    expect(await f.call('odd_skill_load', { name: 'grill' }, exec())).toContain('Grill: reach a shared plan')
+  })
+
+  it('the header names the mapped skill', async () => {
+    const f = fakeCtx()
+    registerAll(f.ctx, { rootDir: '.odd', home })
+    await f.call('odd_task_create', { name: 'game', type: 'feature' }, exec())
+    const { readFile } = await import('node:fs/promises')
+    const cfgPath = join(proj, '.odd', 'config.yml')
+    await writeFile(cfgPath, (await readFile(cfgPath, 'utf8')) + '\nphase_skills:\n  grill: grill-me\n')
+    await mkdir(join(proj, '.odd', 'skills', 'grill-me'), { recursive: true })
+    await writeFile(join(proj, '.odd', 'skills', 'grill-me', 'SKILL.md'), '---\nname: grill-me\ndescription: mine\n---\nMINE')
+    const header = (await f.call('odd_task_read', { name: 'game' }, exec())).split('\n')[0]!
+    expect(header).toContain('skill=grill-me@.odd/skills')
+    expect(header).toContain('odd_skill_load with "grill-me"')
+  })
+})
+

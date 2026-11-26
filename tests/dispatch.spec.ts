@@ -143,6 +143,19 @@ describe('dispatchPhase (code-review)', () => {
     await expect(dispatchPhase({ client, exec: fakeExec() }, cwd, 'login', signal)).rejects.toThrow(/changed while/)
   })
 
+  it('phase_skills: the review phase runs YOUR skill under its own name', async () => {
+    const { readFile } = await import('node:fs/promises')
+    await mkdir(join(cwd, '.odd', 'skills', 'strict-review'), { recursive: true })
+    await writeFile(join(cwd, '.odd', 'skills', 'strict-review', 'SKILL.md'), '---\nname: strict-review\ndescription: strict\n---\nBE VERY STRICT')
+    const cfgPath = join(cwd, '.odd', 'config.yml')
+    await writeFile(cfgPath, (await readFile(cfgPath, 'utf8')) + '\nphase_skills:\n  code-review: strict-review\n')
+    const client = new Fake(completed({ status: 'done', verdict: 'approve', summary: 'ok' }))
+    await dispatchPhase({ client, exec: fakeExec() }, cwd, 'login', signal)
+    expect(client.calls[0]!.prompt).toContain('BE VERY STRICT')
+    expect(client.calls[0]!.prompt).not.toContain('Review for bugs and missing tests.')
+    expect(getSection((await readTask(cwd, 'login')).body, 'Handoffs')).toContain('skill: strict-review@.odd/skills')
+  })
+
   it('phaseMode reflects config', async () => {
     const cfg = await loadConfig(cwd)
     expect(phaseMode(cfg, 'code-review')).toBe('subagent')

@@ -1,4 +1,4 @@
-import { effectiveDeny, type OddConfig, type RoleConfig } from './config'
+import { effectiveDeny, skillFor, type OddConfig, type RoleConfig } from './config'
 import { REPORT_SCHEMA, parseReport, toAdvanceInput, type SubagentReport } from './contract'
 import type { ExecFn } from './exec'
 import { buildPacket } from './packet'
@@ -62,7 +62,7 @@ export async function dispatchPhase(
   }
   const role = cfg.dispatch[phase]
   if (!role) throw new Error(`Phase "${phase}" is not dispatchable (no dispatch.${phase} in config). Run it inline.`)
-  const skill = await loadResolvedSkill(cwd, cfg, phase, { builtinDirs: deps.builtinDirs })
+  const skill = await loadResolvedSkill(cwd, cfg, skillFor(cfg, phase), { builtinDirs: deps.builtinDirs })
 
   let diff: string | undefined
   let diffError: string | undefined

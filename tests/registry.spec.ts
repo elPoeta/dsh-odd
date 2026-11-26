@@ -190,3 +190,58 @@ describe('shipped skills', () => {
     expect(orch.issues).toEqual([])
   })
 })
+
+describe('builtin phase skills (defaults that your own skills override)', () => {
+  const builtin = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills')
+
+  it('cover every phase of every default workflow, with zero errors AND zero warnings', async () => {
+    const reg = await scan(DEFAULT_CONFIG, { builtinDirs: [builtin] })
+    const r = checkRegistry(reg, DEFAULT_CONFIG)
+    expect(r.issues).toEqual([])
+    for (const phase of ['grill', 'story', 'pair', 'fix', 'refactor', 'code-review', 'ship']) {
+      expect(resolveSkill(reg, phase), phase).toMatchObject({ valid: true, source: 'builtin' })
+    }
+  })
+
+  it('are overridden by a project or user skill with the same name (builtin is lowest precedence)', async () => {
+    await put(proj, '.odd/skills/grill/SKILL.md', skill('grill', 'my grill', 'MY OWN GRILL'))
+    const loaded = await loadResolvedSkill(proj, DEFAULT_CONFIG, 'grill', { env, home, builtinDirs: [builtin] })
+    expect(loaded).toMatchObject({ source: '.odd/skills', text: 'MY OWN GRILL' })
+    const pair = await loadResolvedSkill(proj, DEFAULT_CONFIG, 'pair', { env, home, builtinDirs: [builtin] })
+    expect(pair.source).toBe('builtin')
+  })
+
+  it('encode the rules that matter: evidence, no commit, read-only review contract', async () => {
+    const text = async (n: string) => (await loadResolvedSkill(proj, DEFAULT_CONFIG, n, { env, home, builtinDirs: [builtin] })).text
+    expect(await text('pair')).toMatch(/Never write "tests pass" without running them/)
+    expect(await text('ship')).toMatch(/Do NOT commit, push, merge/)
+    const review = await text('code-review')
+    expect(review).toMatch(/verdict/)
+    expect(review).toMatch(/\[blocker\|major\|minor\|nit\]/)
+    expect(review).toMatch(/cannot modify files/)
+    expect(await text('fix')).toMatch(/Root cause/)
+    expect(await text('grill')).toMatch(/do not use `needs_input`/)
+  })
+})
+
+describe('phase_skills: use your own skill under another name', () => {
+  it('check and resolution follow the mapping', async () => {
+    await put(proj, '.odd/skills/grill-me/SKILL.md', skill('grill-me', 'interrogate the plan'))
+    const cfg = mergeConfig({ phase_skills: { grill: 'grill-me' } })
+    const reg = await scan(cfg)
+    const missing = checkRegistry(reg, cfg).issues.filter((i) => i.code === 'missing-skill').map((i) => i.message)
+    expect(missing.some((m) => m.includes('"grill"'))).toBe(false)      // mapped skill satisfies the phase
+    const unmapped = checkRegistry(await scan(DEFAULT_CONFIG), DEFAULT_CONFIG).issues.filter((i) => i.code === 'missing-skill')
+    expect(unmapped.some((i) => i.message.includes('"grill"'))).toBe(true)
+  })
+  it('names the mapped skill in the missing-skill message', async () => {
+    const cfg = mergeConfig({ phase_skills: { story: 'user-stories' } })
+    const msg = checkRegistry(await scan(cfg), cfg).issues.find((i) => i.message.includes('"story"'))!.message
+    expect(msg).toContain('"user-stories"')
+  })
+  it('is validated', () => {
+    expect(() => mergeConfig({ phase_skills: { nope: 'x' } })).toThrow(/not a phase/)
+    expect(() => mergeConfig({ phase_skills: { grill: 'Bad Name' } })).toThrow(/skill name/)
+  })
+})
+

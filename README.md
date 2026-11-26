@@ -27,21 +27,30 @@ through `odd_task_*` tools, guided by the `odd-orchestrator` skill. Phases liste
 - **No manual setup.** `odd_task_create` initializes `.odd/` by itself and says so; `odd_init` does it explicitly;
   `/odd-init` still exists for humans. `odd_task_list`, `odd_skill_list` and `odd_skill_load` work before
   initialization and never create anything.
-- **Sessions act as the orchestrator without commands.** Initialization adds a small managed block to the
+- **Sessions act as the orchestrator without commands.** Outside the ODD preset, initialization adds a small managed block to the
   project's `AGENTS.md` (DSH injects it into every session under that project). It tells the agent: list tasks,
   resume or create one, load the `odd-orchestrator` skill. Only the block between `<!-- odd:begin ... -->` and
   `<!-- odd:end -->` is ever touched; the rest of your file is preserved byte for byte. Opt out with
   `bootstrap.agents_md: false` in `.odd/config.yml` or delete the block.
 - `.odd/` is meant to be committed (the task files are the trace). `.odd/.gitignore` excludes lock/temp files.
 
-### Why not an agent preset (yet)
+### The ODD agent preset (verified on dsh 0.2.2-rc.5)
 
-A preset would give a dedicated "ODD mode" session (own prompt, tool allowlist, model). Presets are per-session
-Cordis compositions, and their mechanism changed across DSH releases (directory-based, then registry-based), with
-user reports of custom presets silently not registering or mounting only partially. Services with consumers outside
-the agent plane (the subagent registry, MCP) cannot live inside a preset, so ODD would split into a host half and a
-preset half. The AGENTS.md block gives most of the benefit with a verified mechanism. A preset is a good later
-step once the smoke test passes: it needs the preset directory/format of your installed version.
+`examples/odd-preset/` is a ready-made preset ("ODD Orchestrator"): a copy of `standard` whose persona line makes the
+session act as the orchestrator (list tasks, resume or create one, load `odd-orchestrator`). It was generated with
+Creator mode and works in a real session: `odd_task_list`, `odd_task_create`, `odd_skill_load` and `odd_task_read`
+ran in sequence, and the project was resolved from the session's cwd.
+
+- **On 0.2.x a preset is a plugin bundle, not a folder in `.agent-presets/`.** That directory is the legacy format;
+  DSH no longer reads it. Creator installs the bundle through the plugin manager. Manual alternative:
+  `dsh plugin --profile web add ./examples/odd-preset`.
+- **Scope: installed in the profile, so available in every project; chosen per session** (Settings > Agent Presets, or
+  the new-session picker). It does not change sessions that are already open, and it is not per project.
+- **No AGENTS.md block for sessions on this preset.** The prompt already carries the protocol, so initialization
+  skips the block when the session's `agentPreset` is in `bootstrap.skip_presets` (default `[odd]`). Other
+  presets still get the block, so ODD works in Standard too.
+- **It is a frozen copy of `standard`.** When DSH upgrades, `standard` may gain rows the copy lacks; diff or regenerate.
+- The preset needs `dsh-plugin-odd` installed as well: the `odd_*` tools and commands come from the plugin.
 
 ## Layout it creates (`/odd-init`)
 
@@ -112,6 +121,18 @@ Default precedence, first match wins (`skills_paths` in `config.yml`):
 
 `{project}` is the nearest `.git` ancestor (cwd if none), like DSH. `~` and plain relative paths still work.
 
+- **Builtin phase skills.** The plugin ships a default skill for every phase of the default workflows (`grill`,
+  `story`, `pair`, `fix`, `refactor`, `code-review`, `ship`) plus `odd-orchestrator`, so a fresh project works with
+  no skills of your own. They sit at the lowest precedence: put a skill with the same name in `.odd/skills/`,
+  `{project}/.agents/skills/` or `~/.agents/skills/` and yours wins. `/odd-skills check` shows which one is used.
+- **Your own skills under other names.** If your skills are called differently (say `grill-me`), map them instead of
+  renaming: `phase_skills: { grill: grill-me }` in `.odd/config.yml`. Dispatch, `odd_task_read` and
+  `/odd-skills check` all follow the mapping. To add a phase (for example `backlog` before `grill`), edit
+  `workflows.feature` and provide a skill with that name.
+- **A missing skill never changes a task.** `odd_task_read` flags `skill=MISSING "<name>"` and the protocol tells the
+  agent to explain what is missing and stop. It must not call `odd_task_advance` (a tooling gap is not a phase result).
+- **Descriptions must be valid YAML.** An unquoted `: ` inside `description:` makes the frontmatter unparseable;
+  `/odd-skills check` reports it as `bad-frontmatter`.
 - **Progressive disclosure:** the index keeps name + description; the body is read from disk only when
   loaded (`odd_skill_load`, or embedded in a dispatch packet). Edits take effect on the next load.
 - **Validation** (`/odd-skills check`): errors for missing frontmatter, unparseable YAML, invalid name,
