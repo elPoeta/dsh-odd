@@ -5,6 +5,7 @@
       config:
         id: odd
         name: ODD Orchestrator
+        description: Orchestrates features, hotfixes, and refactors using the ODD workflow.
         order: 1
         plugins:
           - id: persona
