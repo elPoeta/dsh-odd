@@ -16,7 +16,7 @@ Talk to the human in their own language. The task file `.odd/tasks/<name>.md` is
 
 | The request is | Type | Starts at |
 |---|---|---|
-| A vague idea, a new project, or several stories | `plan` | `grill` (use `phase: backlog` when the idea is already clear) |
+| A vague idea, a new project, or several stories | `plan` | `grill` (use `phase: to-tickets` when the plan is already decided and only needs slicing) |
 | One concrete story or ticket | `feature` | `story` |
 | A story whose acceptance criteria are already agreed | `feature` | `pair` (`phase: pair`) |
 | A bug or an error | `hotfix` | `fix` |
@@ -36,7 +36,7 @@ When unsure, ask the human which one it is. Quick questions and tiny edits do no
 1. Load the phase instructions with `odd_skill_load` (the exact name from the header) and follow them. Use `odd_skill_load`, not the native skill tool: it applies ODD precedence (project skills override global ones) and can see `.odd/skills`.
 2. Record as you go with `odd_task_note`. Sections: Goal, Backlog, Story, Acceptance criteria, Implementation plan, Out of scope, Suggestions, Tickets, Test list, Root cause, Decisions, Answers, Lessons, Reviews, Verification, Delivery, Evidence, Open questions. Mode `append` adds a line; mode `replace` rewrites a section (use it for the structured ones). Tick checklist items with `odd_task_check`. Headings inside notes are demoted automatically.
 3. Never claim tests pass without running them yourself and recording the exact command and result under Evidence.
-4. Interactive phases (grill, backlog, to-tickets, story, pair, fix, refactor, ship): ask the human directly in the conversation and wait. Use `needs_input` only when you must stop now and the answer will come in a later session.
+4. Interactive phases (grill, to-tickets, story, pair, fix, refactor, ship): ask the human directly in the conversation and wait. Use `needs_input` only when you must stop now and the answer will come in a later session.
 5. Close the phase with `odd_task_advance`:
    - `done`: the phase finished; the task moves on.
    - `changes_requested`: only from a review or a verification; returns to the implementation phase.

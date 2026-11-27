@@ -115,12 +115,12 @@ export const DEFAULT_CONFIG: OddConfig = {
   mode: 'manual',
   limits: { max_review_loops: 3, max_step_retries: 2 },
   workflows: {
-    plan: ['grill', 'backlog', 'to-tickets'],
+    plan: ['grill', 'to-tickets'],
     feature: ['story', 'pair', 'code-review', 'verify', 'ship'],
     hotfix: ['fix', 'code-review', 'verify', 'ship'],
     refactor: ['refactor', 'code-review', 'ship'],
   },
-  review_loopback: { plan: 'backlog', feature: 'pair', hotfix: 'fix', refactor: 'refactor' },
+  review_loopback: { plan: 'grill', feature: 'pair', hotfix: 'fix', refactor: 'refactor' },
   skills_paths: [...DEFAULT_SKILLS_PATHS],
   dispatch: {
     'code-review': { ...ROLE_DEFAULTS, include_diff: true, skills: ['testing'] },
@@ -139,12 +139,12 @@ limits:
   max_review_loops: 3   # pair <-> code-review iterations before the task is blocked
   max_step_retries: 2   # failed retries per phase before the task is blocked
 workflows:
-  plan: [grill, backlog, to-tickets]   # an idea becomes tickets; each ticket is a feature task
+  plan: [grill, to-tickets]   # an idea becomes tickets; each ticket is a feature task
   feature: [story, pair, code-review, verify, ship]
   hotfix: [fix, code-review, verify, ship]
   refactor: [refactor, code-review, ship]
 review_loopback:       # where a failed review or verification sends the task back to
-  plan: backlog
+  plan: grill
   feature: pair
   hotfix: fix
   refactor: refactor

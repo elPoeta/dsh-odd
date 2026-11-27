@@ -78,7 +78,7 @@ const planTail = `## Backlog
 ## Evidence`
 
 export const DEFAULT_TEMPLATES: Record<TaskType, string> = {
-  plan: head('<!-- plan: the idea. Grill it, slice it into a backlog, then turn it into tickets (one task each) -->\n') + planTail,
+  plan: head('<!-- plan: the idea. Grill it, then turn it into tickets (one task each). Later phases go under Backlog as one-line themes -->\n') + planTail,
   feature: head() + tail(),
   hotfix: head('<!-- hotfix: describe the symptom; the cause goes under Root cause -->\n') + tail('## Root cause\n\n'),
   refactor: head('<!-- refactor: behavior must not change; the safety net goes under Test list -->\n') + tail(),

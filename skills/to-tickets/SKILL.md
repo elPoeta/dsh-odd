@@ -1,13 +1,13 @@
 ---
 name: to-tickets
-description: Turns an approved backlog, plan or spec into tracer-bullet tickets that declare what blocks them, and creates each ticket as an ODD task in dependency order. Vertical slices, prefactoring first, expand-contract for wide refactors. Last phase of a plan.
+description: Turns a plan, a spec or the decisions of a grill into tracer-bullet tickets that declare what blocks them, and creates each ticket as an ODD task in dependency order. Vertical slices, prefactoring first, expand-contract for wide refactors. Last phase of a plan.
 ---
 
 # To tickets
 
-Break a plan, a spec or an approved backlog into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it. In ODD every ticket becomes a task (its own file) and the blocking edges are enforced: a blocked task cannot be worked or advanced until its blockers are done.
+Break a plan, a spec or the decisions of a grill into a set of **tickets**: tracer-bullet vertical slices, each declaring the tickets that **block** it. In ODD every ticket becomes a task (its own file) and the blocking edges are enforced: a blocked task cannot be worked or advanced until its blockers are done.
 
-Version: 2.0 (ODD). Reads: Goal, Backlog, Decisions, Answers. Writes: Tickets, Decisions, Open questions (and creates the tasks).
+Version: 2.0 (ODD). Reads: Goal, Decisions, Answers. Writes: Tickets, Backlog, Decisions, Open questions (and creates the tasks).
 
 ## Language
 
@@ -18,9 +18,9 @@ Version: 2.0 (ODD). Reads: Goal, Backlog, Decisions, Answers. Writes: Tickets, D
 
 ### 1. Gather context
 
-Work from what is already in the task: the approved **Backlog** first, then Decisions and Answers. If I pass a reference instead (a spec path, an issue number or URL), fetch it with `gh` or an available MCP tool and read its full body and comments; if you cannot reach it, ask me to paste it.
+Work from what is already in the task: the Goal and the Decisions and Answers recorded by `grill`. If I pass a reference instead (a spec path, an issue number or URL), fetch it with `gh` or an available MCP tool and read its full body and comments; if you cannot reach it, ask me to paste it.
 
-With an approved Backlog, **do not re-slice it**: each story is one ticket. `Requires: #N` and the order give the first edges. Re-slice only if I ask or a story is clearly horizontal or too big for one fresh context window.
+Do not invent requirements. If a decision you need is not recorded, ask me, one question at a time with your suggested answer.
 
 ### 2. Explore the codebase (optional)
 
@@ -39,7 +39,15 @@ Look for prefactoring that makes the implementation easier: "Make the change eas
 
 </vertical-slice-rules>
 
-Give each ticket its **blocking edges**: the other tickets that must complete before it can start. Only real gates count; a ticket with no blockers can start immediately. A pure chain where every ticket blocks the next one usually means the slicing is wrong.
+Rules that keep the breakdown honest:
+
+- **Each ticket delivers value on its own,** from the user's point of view. The actor is never the developer or the system. "Set up the database" or "create the user model" are not tickets: that infrastructure gets built inside the first ticket that needs it.
+- **The first ticket is the walking skeleton:** the smallest slice usable end to end.
+- **Order by dependency first, then by value to the user.** Numbering follows that order.
+- **Few tickets: about 10-15.** If the plan needs more, group them into phases and break down only the first. Record the later phases as one-line themes under "Backlog" for me to confirm; when we reach one, start a new `plan` task at `to-tickets` with its theme as the goal.
+- **Respect the decisions recorded by `grill`,** especially the expensive-to-change ones (tenancy, permissions, offline or sync, languages or currencies, stack): they shape the first slices.
+
+Give each ticket its **blocking edges**: the other tickets that must complete before it can start. Only real gates count; a ticket without blockers can start now. A pure chain usually means the slicing is wrong.
 
 **Wide refactors are the exception to vertical slicing.** A wide refactor is one mechanical change (rename a column, retype a shared symbol) whose blast radius fans across the whole codebase, so a single edit breaks thousands of call sites and no vertical slice can land green. Sequence it as **expand-contract**:
 
@@ -57,13 +65,7 @@ Present the proposed breakdown as a numbered list. For each ticket show:
 - **Blocked by:** which tickets, if any, must complete first.
 - **What it delivers:** the end-to-end behavior this ticket makes work.
 
-Ask me:
-
-- Does the granularity feel right (too coarse, too fine)?
-- Are the blocking edges correct: does each ticket depend only on tickets that genuinely gate it?
-- Should any tickets be merged or split further?
-
-Iterate until I approve the breakdown.
+Ask me whether the granularity feels right (too coarse, too fine), whether each ticket depends only on tickets that genuinely gate it, and whether any should be merged or split. Iterate until I approve the breakdown.
 
 ### 5. Create the tasks
 
@@ -72,15 +74,17 @@ Only after I approve. In **dependency order, blockers first** (a task can only b
 - `name`: `<feature-slug>-<NN>-<ticket-slug>`, numbered from `01` in dependency order, lowercase with hyphens. It must be unique in the project.
 - `type`: `feature`; `refactor` for prefactoring and expand-contract tickets.
 - `phase`: `story` for feature tickets (the story phase refines the criteria just in time). Omit it for refactor tickets.
-- `title` and `goal`: the goal is "What to build" in the ticket template below, with the draft acceptance criteria as `- [ ]` lines. Say in the goal that the criteria are drafts for the story phase to refine.
+- `title` and `goal`: the goal follows the ticket template below: the story line, what to build, and the draft acceptance criteria as `- [ ]` lines. Say in the goal that the criteria are drafts for the story phase to refine.
 - `parent`: the id of this plan task.
 - `blocked_by`: comma-separated ids of the tickets that gate it.
 
-Then record the list once with `odd_task_note`, section "Tickets", mode `replace`, one line per ticket: `- <task id>: <title> (blocked by: <ids or none>)`.
+Then record the list once with `odd_task_note`, section "Tickets", mode `replace`, one line per ticket: `- <task id>: <title> (blocked by: <ids or none>)`. If there are later phases, record their themes the same way under "Backlog", one line each.
 
 Do not modify or close any parent issue. If I ask for the tickets in an external tracker (GitHub, Linear…), publish one issue per ticket in dependency order with the platform's native blocking or sub-issue relationship, and keep the issue reference in the task goal. The tasks still carry the work.
 
 <ticket-template>
+
+**Story:** As a <actor>, I want <action>, so that <benefit>.
 
 **What to build:** the end-to-end behavior this ticket makes work, from the user's perspective, not a layer-by-layer implementation list.
 
@@ -91,10 +95,8 @@ Do not modify or close any parent issue. If I ask for the tickets in an external
 
 </ticket-template>
 
-Avoid file paths and code snippets in tickets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (a state machine, a reducer, a schema, a type shape), inline it, say briefly that it came from a prototype, and trim it to the decision-rich part.
+Avoid file paths and code snippets in tickets: they go stale fast. Exception: a prototype snippet that encodes a decision more precisely than prose can (a state machine, a schema, a type shape). Inline only its decision-rich part, noting it came from a prototype.
 
 ### 6. Hand over the frontier
 
-The **frontier** is every ticket whose blockers are all done; for a linear chain that is the first one. Run `odd_task_list`: tasks that are ready appear under "Ready to work". Tell me the frontier and ask which ticket to start with.
-
-Finish with `odd_task_advance`, outcome `done`, summary "N tickets, frontier: <ids>".
+The **frontier** is every ticket whose blockers are all done. Run `odd_task_list`: ready tasks appear under "Ready to work". Tell me the frontier and ask which ticket to start with. Finish with `odd_task_advance`, outcome `done`, summary "N tickets, frontier: <ids>".

@@ -1,7 +1,6 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, effectiveDeny, mergeConfig } from '../src/core/config'
 import { parseReport, toAdvanceInput } from '../src/core/contract'
@@ -13,8 +12,9 @@ import {
 } from '../src/core/task'
 import { registerAll } from '../src/host/adapter'
 import { fakeCtx, sessionExec } from './fake-ctx'
+import { shippedSkillsDir } from './shipped'
 
-const SKILLS = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills')
+const SKILLS = shippedSkillsDir()
 let home: string, proj: string
 beforeEach(async () => {
   home = await mkdtemp(join(tmpdir(), 'odd-pl-'))
@@ -128,11 +128,11 @@ describe('answers reach the next executor', () => {
 })
 
 describe('task types, start phase and dependencies', () => {
-  it('a plan task walks grill, backlog, to-tickets; a later start phase marks the earlier ones skipped', async () => {
+  it('a plan task walks grill, to-tickets; a later start phase marks the earlier ones skipped', async () => {
     await initOdd(proj)
-    const t = await createTask(proj, { name: 'idea', type: 'plan', phase: 'backlog' })
-    expect(t.frontmatter.phase).toBe('backlog')
-    expect(getSection(t.body, 'Plan')).toBe('- [x] grill (skipped)\n- [ ] backlog\n- [ ] to-tickets')
+    const t = await createTask(proj, { name: 'idea', type: 'plan', phase: 'to-tickets' })
+    expect(t.frontmatter.phase).toBe('to-tickets')
+    expect(getSection(t.body, 'Plan')).toBe('- [x] grill (skipped)\n- [ ] to-tickets')
     expect(sectionNames(t.body)).toEqual(expect.arrayContaining(['Backlog', 'Tickets']))
     await expect(createTask(proj, { name: 'bad', type: 'feature', phase: 'grill' })).rejects.toThrow(/not a phase of the feature workflow/)
   })
@@ -280,7 +280,7 @@ describe('config for the new roles', () => {
   })
   it('ships plan, feature, hotfix and refactor workflows', () => {
     expect(DEFAULT_CONFIG.workflows).toEqual({
-      plan: ['grill', 'backlog', 'to-tickets'],
+      plan: ['grill', 'to-tickets'],
       feature: ['story', 'pair', 'code-review', 'verify', 'ship'],
       hotfix: ['fix', 'code-review', 'verify', 'ship'],
       refactor: ['refactor', 'code-review', 'ship'],

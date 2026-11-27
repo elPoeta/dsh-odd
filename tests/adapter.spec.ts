@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { REPORT_SCHEMA } from '../src/core/contract'
 import { createTask, initOdd } from '../src/core/store'
 import { registerAll } from '../src/host/adapter'
+import { shippedSkillsDir } from './shipped'
 
 /**
  * Fake ctx that enforces the VERIFIED harness shapes, so the adapter can't drift:
@@ -454,7 +455,7 @@ describe('missing skills do not corrupt the task (regression from a real session
   })
 
   it('with the builtin skills installed the same task just works', async () => {
-    const builtin = join(__dirname, '..', 'skills')
+    const builtin = shippedSkillsDir()
     const f = fakeCtx()
     registerAll(f.ctx, { rootDir: '.odd', home, builtinDirs: [builtin] })
     await f.call('odd_task_create', { name: 'game', type: 'feature', goal: 'a game' }, exec())

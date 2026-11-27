@@ -74,7 +74,7 @@ export async function loadConfig(cwd: string, rootDir?: string, allowMissing = f
 
 export async function withLock<T>(file: string, fn: () => Promise<T>, staleMs = 30_000): Promise<T> {
   const lock = file + '.lock'
-  for (let attempt = 0; attempt < 40; attempt++) {
+  for (let attempt = 0; attempt < 200; attempt++) {
     try {
       await writeFile(lock, String(process.pid), { flag: 'wx' })
       try { return await fn() } finally { await rm(lock, { force: true }) }
@@ -82,7 +82,7 @@ export async function withLock<T>(file: string, fn: () => Promise<T>, staleMs = 
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
       const age = Date.now() - (await stat(lock).then((s) => s.mtimeMs, () => Date.now()))
       if (age > staleMs) await rm(lock, { force: true })
-      else await new Promise((r) => setTimeout(r, 50))
+      else await new Promise((r) => setTimeout(r, 25))
     }
   }
   throw new Error(`Could not acquire lock for ${file}`)

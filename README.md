@@ -58,7 +58,7 @@ ran in sequence, and the project was resolved from the session's cwd.
 An idea becomes tickets; each ticket is its own task and goes through its own delivery workflow.
 
 ```
-plan      grill -> backlog -> to-tickets          (creates one feature task per ticket, with blockers)
+plan      grill -> to-tickets                     (creates one feature task per ticket, with blockers)
 feature   story -> pair -> code-review -> verify -> ship
 hotfix    fix  -> code-review -> verify -> ship
 refactor  refactor -> code-review -> ship
@@ -66,9 +66,8 @@ refactor  refactor -> code-review -> ship
 
 | Skill | Runs | What it does |
 |---|---|---|
-| `grill` | inline | interviews you in rounds over a design tree until the frontier is empty; records decisions as it goes |
-| `backlog` | inline | slices the idea into ordered one-line vertical stories (stack and expensive decisions first) |
-| `to-tickets` | inline | tracer-bullet tickets with blocking edges; creates them as tasks in dependency order; expand-contract for wide refactors |
+| `grill` | inline | interviews you in rounds over a design tree until the frontier is empty; asks the stack (new project) and the expensive-to-change decisions; records decisions as it goes |
+| `to-tickets` | inline | slices the decisions into tracer-bullet tickets (walking skeleton first, no technical stories, about 10-15 per phase) with blocking edges; creates them as tasks in dependency order; expand-contract for wide refactors |
 | `story` | inline | one story: 2-3 Given/When/Then criteria, mini plan, out of scope (writes `Story`, `Acceptance criteria`, ...) |
 | `pair` | inline | driver/navigator TDD, one test at a time; also fixes review and verification findings |
 | `fix` | inline | reproduce with a failing test, confirm the cause, minimum fix, regression guard |
@@ -109,6 +108,12 @@ Upgrading a project initialized by an older version: your `.odd/config.yml` keep
 get `plan`'s phases, `verify` or the `dispatch.verify` role until you merge them (delete the `workflows:` and `dispatch:`
 blocks to take the new defaults, or copy them from a fresh `/odd-init`), and `.odd/templates/*.md` are never overwritten
 (sections are created on demand either way).
+
+**Why there is no `backlog` skill.** It sliced ideas into ordered stories, which is what `to-tickets` does too, and
+`to-tickets` already has its own approval step. Its unique rules moved: the stack and the expensive-to-change
+decisions are seed questions in `grill`; "no technical stories", walking skeleton first, order by dependency and value, and
+the 10-15 cap with later phases as one-line themes (section `Backlog`) are slicing rules in `to-tickets`. If your
+`.odd/config.yml` still lists `backlog` under `workflows.plan`, change it to `[grill, to-tickets]`.
 
 Acceptance scenarios to run by hand against a real session: `evals/scenarios.md`.
 
@@ -182,7 +187,7 @@ Default precedence, first match wins (`skills_paths` in `config.yml`):
 `{project}` is the nearest `.git` ancestor (cwd if none), like DSH. `~` and plain relative paths still work.
 
 - **Builtin phase skills.** The plugin ships a default skill for every phase of the default workflows (`grill`,
-  `backlog`, `to-tickets`, `story`, `pair`, `fix`, `refactor`, `code-review`, `verify`, `ship`), the shared `tdd` and
+  `to-tickets`, `story`, `pair`, `fix`, `refactor`, `code-review`, `verify`, `ship`), the shared `tdd` and
   `testing`, and `odd-orchestrator`, so a fresh project works with no skills of your own. They sit at the lowest precedence: put a skill with the same name in `.odd/skills/`,
   `{project}/.agents/skills/` or `~/.agents/skills/` and yours wins. `/odd-skills check` shows which one is used.
 - **Your own skills under other names.** If your skills are called differently (say `grill-me`), map them instead of
@@ -307,10 +312,17 @@ needed at `odd_dispatch` time and gives a clear error if missing.
 
 ## Develop
 
+The test suite is hermetic: `tests/setup.ts` points `HOME` at a temp directory and clears `DSH_HOME` / `DSH_AGENTS_HOME`, and
+the tests use a private copy of the shipped skills. It does not depend on the skills in your real home, nor on extra
+folders you add under `skills/`. (An earlier version read your real `~/.agents/skills`, so your own skills made 4 tests
+fail on your machine and not on mine.)
+
+
 ```sh
 pnpm install && pnpm test && pnpm build
 dsh plugin --profile web add /path/to/dsh-odd
 ```
 
-Then copy `skills/odd-orchestrator` to `$DSH_HOME/skills/` (or `~/.agents/skills/`) until
-the plugin registers it through `ctx.skills` (planned for phase 3).
+Do NOT copy the plugin's skills into `~/.agents/skills` or `$DSH_HOME/skills`: the plugin serves them itself
+(`odd_skill_load`), and a copy there silently shadows the newer builtin after every update. Keep only skills you
+intentionally override; `/odd-skills` shows `+N shadowed` and `/odd-skills check` lists each shadowing copy.

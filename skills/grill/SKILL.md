@@ -36,6 +36,13 @@ Each round I answer reshapes the tree: settled decisions push the frontier outwa
 
 Challenge vague answers ("fast", "simple", "like X") by asking for a concrete example or a number.
 
+## Seed the tree
+
+Before the first round, read `AGENTS.md` (or `CLAUDE.md`) and skim the code, so you never ask what it already answers. Then make sure these branches are in the tree. Ask them only when they apply, and never design them for me:
+
+- **New project only: the stack.** Only the stack, not the architecture or the implementation. For an existing project, use the stack you found and just confirm it.
+- **Expensive-to-change decisions:** multi-tenant or multi-organization; a permissions or roles model; offline or sync; multi-language or multi-currency. Ask whether each one applies.
+
 ## Facts are yours, decisions are mine
 
 Finding *facts* is your job, never mine. When a frontier question needs a fact from the environment (code, files, configuration, docs, git history), find it yourself with your read and search tools. For a larger exploration, delegate it to a read-only sub-agent (the `subagent` tool) when it is available. Do not ask me for anything you could look up.
@@ -52,6 +59,8 @@ The task file is the memory, so a cut session can resume where it stopped.
 ## Done
 
 The session is done when the frontier is empty: every branch of the design tree visited, nothing left silently assumed. Read back the settled decisions as a short summary and **wait for my confirmation** that we reached a shared understanding. Do not act on it before that.
+
+For a new project, offer to save the context and the stack in `AGENTS.md` (or `CLAUDE.md`). If the file exists, add to it and never overwrite it.
 
 Then call `odd_task_advance` with outcome `done` and a summary such as "N decisions, shared understanding confirmed". If I stop earlier, leave the tree as recorded and do not advance.
 

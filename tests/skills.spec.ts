@@ -1,19 +1,19 @@
 import { readFileSync, readdirSync } from 'node:fs'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { parse } from 'yaml'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG } from '../src/core/config'
 import { KNOWN_SECTIONS } from '../src/core/task'
 import { registerAll } from '../src/host/adapter'
 import { fakeCtx } from './fake-ctx'
+import { PLUGIN_SKILLS_DIR, SHIPPED } from './shipped'
 
 /**
  * Static lint of the builtin skills. An LLM's behavior cannot be unit-tested, but the contract
  * between skills, tools and the task file can: every tool, section and phase a skill names must exist.
  */
-const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills')
-const names = readdirSync(dir).sort()
+const dir = PLUGIN_SKILLS_DIR
+const names = [...SHIPPED].sort()      // only what we ship: extra folders a developer adds are not linted
 const skills = Object.fromEntries(names.map((n) => {
   const text = readFileSync(join(dir, n, 'SKILL.md'), 'utf8')
   const m = /^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(text)!
@@ -27,8 +27,8 @@ const list = (raw: string) => raw.replace(/\(.*?\)/g, '').split(',').map((s) => 
 const reads = (n: string) => { const m = /Reads: (.+?)\. Writes: (.+?)\./.exec(skills[n]!.body); return m ? { reads: list(m[1]!), writes: list(m[2]!) } : undefined }
 
 describe('builtin skills', () => {
-  it('ships exactly the expected set', () => {
-    expect(names).toEqual(['backlog', 'code-review', 'fix', 'grill', 'odd-orchestrator', 'pair', 'refactor', 'ship', 'story', 'tdd', 'testing', 'to-tickets', 'verify'])
+  it('every shipped skill is present in the plugin folder', () => {
+    expect(readdirSync(dir)).toEqual(expect.arrayContaining(names))
   })
 
   it.each(names)('%s: valid frontmatter, name matches its folder, bounded size', (n) => {
@@ -70,7 +70,7 @@ describe('builtin skills', () => {
 
   it('the structured sections are written by exactly the phase that owns them', () => {
     const writers = (section: string) => names.filter((n) => reads(n)?.writes.includes(section))
-    expect(writers('Backlog')).toEqual(['backlog'])
+    expect(writers('Backlog')).toEqual(['to-tickets'])        // later-phase themes
     expect(writers('Tickets')).toEqual(['to-tickets'])
     expect(writers('Story')).toEqual(['fix', 'story'])
     expect(writers('Acceptance criteria')).toEqual(['fix', 'ship', 'story'])
@@ -98,7 +98,7 @@ describe('builtin skills', () => {
       expect(t).toMatch(/`###` headings only/)
       expect(t).not.toMatch(/odd_task_(advance|note|check)/)               // a subagent cannot call the odd tools
     }
-    for (const n of ['pair', 'fix', 'refactor', 'story', 'backlog', 'grill', 'to-tickets', 'ship']) expect(skills[n]!.text, n).toMatch(/odd_task_advance/)
+    for (const n of ['pair', 'fix', 'refactor', 'story', 'grill', 'to-tickets', 'ship']) expect(skills[n]!.text, n).toMatch(/odd_task_advance/)
   })
 
   it('none of the human-in-the-loop skills lets the agent commit', () => {

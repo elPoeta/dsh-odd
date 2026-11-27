@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { shippedSkillsDir } from './shipped'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { DEFAULT_CONFIG, mergeConfig } from '../src/core/config'
 import {
@@ -168,7 +168,7 @@ describe('check (doctor)', () => {
   })
 
   it('is clean when every phase has a valid skill', async () => {
-    for (const p of ['grill', 'backlog', 'to-tickets', 'story', 'pair', 'code-review', 'verify', 'ship', 'fix', 'refactor', 'testing']) await put(proj, `.odd/skills/${p}/SKILL.md`, skill(p))
+    for (const p of ['grill', 'to-tickets', 'story', 'pair', 'code-review', 'verify', 'ship', 'fix', 'refactor', 'testing']) await put(proj, `.odd/skills/${p}/SKILL.md`, skill(p))
     const r = checkRegistry(await scan(), DEFAULT_CONFIG)
     expect(r).toMatchObject({ errors: 0, warnings: 0 })
     expect(formatCheck(r)).toContain('OK')
@@ -183,7 +183,7 @@ describe('check (doctor)', () => {
 
 describe('shipped skills', () => {
   it("the plugin's own bundled skills validate cleanly", async () => {
-    const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills')
+    const dir = shippedSkillsDir()
     const reg = await scan(DEFAULT_CONFIG, { builtinDirs: [dir] })
     const orch = reg.byName.get('odd-orchestrator')![0]!
     expect(orch).toMatchObject({ valid: true, source: 'builtin' })
@@ -192,13 +192,13 @@ describe('shipped skills', () => {
 })
 
 describe('builtin phase skills (defaults that your own skills override)', () => {
-  const builtin = join(dirname(fileURLToPath(import.meta.url)), '..', 'skills')
+  const builtin = shippedSkillsDir()
 
   it('cover every phase of every default workflow, with zero errors AND zero warnings', async () => {
     const reg = await scan(DEFAULT_CONFIG, { builtinDirs: [builtin] })
     const r = checkRegistry(reg, DEFAULT_CONFIG)
     expect(r.issues).toEqual([])
-    for (const phase of ['grill', 'backlog', 'to-tickets', 'story', 'pair', 'fix', 'refactor', 'code-review', 'verify', 'ship', 'tdd', 'testing']) {
+    for (const phase of ['grill', 'to-tickets', 'story', 'pair', 'fix', 'refactor', 'code-review', 'verify', 'ship', 'tdd', 'testing']) {
       expect(resolveSkill(reg, phase), phase).toMatchObject({ valid: true, source: 'builtin' })
     }
   })
